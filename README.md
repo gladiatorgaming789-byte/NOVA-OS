@@ -2,7 +2,7 @@
 
 **NOVA-OS is an experimental operating system built from scratch for x86-64 PCs and Oracle VirtualBox.** It is not a Linux distribution and does not use the Linux kernel.
 
-> **Status:** early x86-64 kernel prototype with a polling keyboard and a tiny interactive command shell. It is not a complete operating system yet.
+> **Status:** early x86-64 kernel prototype with an interrupt-driven keyboard queue, PIT timer, BIOS E820 memory discovery, a bitmap physical-page allocator, and a tiny interactive shell. It is not a complete operating system yet.
 
 ## Project goals
 
@@ -47,10 +47,13 @@ Never infer a later checkpoint merely because an earlier one appeared.
 
 1. Reproducible BIOS boot image and reliable serial/VGA diagnostics.
 2. Stable protected-mode and x86-64 long-mode transitions with explicit failure checkpoints.
-3. Minimal IDT and CPU exception reporting; BIOS E820 memory-map discovery is now implemented, while a physical memory allocator and heap remain future work.
-4. Keyboard input and a tiny interactive shell (polling PS/2 input; commands: `help`, `about`, `clear`, `memory`, `reboot`).
-5. Filesystem and persistence.
-6. Graphical environment and applications.
+3. Minimal IDT, CPU exception reporting, PIC/PIT interrupts, and queued PS/2 keyboard input.
+4. BIOS E820 memory-map discovery and a bitmap allocator for 4 KiB physical pages below 1 GiB. The `memory` command reports free pages; `alloc` and `free` exercise a single test allocation.
+5. Virtual memory improvements and a kernel heap.
+6. Preemptive multitasking and scheduler.
+7. Filesystem and persistence.
+8. User programs and system calls.
+9. Graphical environment, applications, networking, and broader device support.
 
 ## Repository layout
 
