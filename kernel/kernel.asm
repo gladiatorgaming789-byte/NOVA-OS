@@ -109,7 +109,7 @@ print16:
 collect_e820:
     pushad
     push es
-    xor ax, ax
+    mov ax, 0x5000
     mov es, ax
     mov word [e820_count], 0
     mov dword [e820_continuation], 0
@@ -119,8 +119,9 @@ collect_e820:
     mov ax, [e820_count]
     mov dx, 24
     mul dx
-    add ax, 0x5000
     mov di, ax
+    mov ax, 0x5000
+    mov es, ax
     mov dword [es:di + 20], 1
     mov eax, 0xE820
     mov edx, 0x534D4150
@@ -922,7 +923,7 @@ pmm_init64:
     mov edi, PMM_BITMAP
     mov dword [rel free_page_count], 0
     movzx ebp, word [rel e820_count]
-    mov esi, 0x5000
+    mov esi, 0x50000
 .entry:
     test ebp, ebp
     jz .done
