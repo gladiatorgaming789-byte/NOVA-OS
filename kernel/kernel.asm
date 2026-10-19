@@ -1046,8 +1046,8 @@ kmalloc64:
     test r13, r13
     jz .need_page
     mov rax, [r13]
-    test rax, HEAP_USED_BIT
-    jnz .next
+    bt rax, 63
+    jc .next
     btr rax, 63
     cmp rax, r12
     jae .found
@@ -1121,8 +1121,8 @@ kfree64:
     jmp .find
 .found:
     mov rbx, [r13]
-    test rbx, HEAP_USED_BIT
-    jz .return
+    bt rbx, 63
+    jnc .return
     btr rbx, 63
     mov [r13], rbx
     ; Coalesce adjacent free blocks in list order.
@@ -1131,14 +1131,14 @@ kfree64:
     test r13, r13
     jz .success
     mov rax, [r13]
-    test rax, HEAP_USED_BIT
-    jnz .coalesce_next
+    bt rax, 63
+    jc .coalesce_next
     mov rbx, [r13 + 8]
     test rbx, rbx
     jz .coalesce_next
     mov rcx, [rbx]
-    test rcx, HEAP_USED_BIT
-    jnz .coalesce_next
+    bt rcx, 63
+    jc .coalesce_next
     lea rdx, [r13 + 16]
     add rdx, rax
     cmp rdx, rbx
