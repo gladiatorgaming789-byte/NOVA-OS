@@ -773,6 +773,7 @@ irq0_handler64:
 irq1_handler64:
     push rax
     push rbx
+    push rdx
     mov dx, 0x60
     in al, dx
     mov bl, [rel key_queue_head]
@@ -782,11 +783,13 @@ irq1_handler64:
     cmp ah, [rel key_queue_tail]
     je .queue_full
     movzx ebx, bl
-    mov [rel key_queue + rbx], al
+    lea rdx, [rel key_queue]
+    mov [rdx + rbx], al
     mov [rel key_queue_head], ah
 .queue_full:
     mov al, 0x20
     out 0x20, al
+    pop rdx
     pop rbx
     pop rax
     iretq
