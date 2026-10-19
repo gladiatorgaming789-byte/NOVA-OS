@@ -22,8 +22,21 @@ $Image = New-Object byte[] (1474560)
 [Array]::Copy($Kernel, 0, $Image, 512, $Kernel.Length)
 $ImagePath = Join-Path $Out "nova-os.img"
 [IO.File]::WriteAllBytes($ImagePath, $Image)
-$Hash = (Get-FileHash -Algorithm SHA256 $ImagePath).Hash.ToLower()
-"$Hash  nova-os.img" | Set-Content -Encoding ascii (Join-Path $Out "SHA256SUMS.txt")
-Write-Host "Built $ImagePath"
+$Xorriso = Get-Command xorriso -ErrorAction SilentlyContinue
+if (-not $Xorriso) {
+    throw "xorriso is required to create nova-os.iso. Install xorriso and ensure xorriso.exe is on PATH."
+}
+$IsoRoot = Join-Path $Out "iso-root"
+New-Item -ItemType Directory -Force -Path $IsoRoot | Out-Null
+Copy-Item -Force $ImagePath (Join-Path $IsoRoot "nova-os.img")
+& xorriso -as mkisofs -o (Join-Path $Out "nova-os.iso") -V NOVA_OS -b nova-os.img -c boot.cat $IsoRoot
+if ($LASTEXITCODE -ne 0) { throw "xorriso failed creating the bootable ISO." }
+
+$Hashes = @(
+    "$( (Get-FileHash -Algorithm SHA256 $ImagePath).Hash.ToLower() )  nova-os.img"
+    "$( (Get-FileHash -Algorithm SHA256 (Join-Path $Out "nova-os.iso")).Hash.ToLower() )  nova-os.iso"
+)
+$Hashes | Set-Content -Encoding ascii (Join-Path $Out "SHA256SUMS.txt")
+Write-Host "Built floppy image: $ImagePath"
+Write-Host "Built bootable ISO: $(Join-Path $Out 'nova-os.iso')"
 Write-Host "Boot sector: $($Boot.Length) bytes; kernel: $($Kernel.Length) bytes"
-Write-Host "This is a raw floppy image, not an ISO. Attach it as a floppy in VirtualBox."
