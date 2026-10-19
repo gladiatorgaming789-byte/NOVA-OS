@@ -305,12 +305,20 @@ long_mode_entry:
     call pic_init64
     call pit_init64
     call pmm_init64
+    mov al, 'S'
+    call serial_putc64
     call scheduler_init64
+    mov al, 'T'
+    call serial_putc64
 %ifdef NOVA_TEST_EXCEPTION
     int3                         ; CI-only fault injection validates the IDT.
 %endif
     call screen_clear64
+    mov al, 'U'
+    call serial_putc64
     sti
+    mov al, 'V'
+    call serial_putc64
     mov rsi, banner64
     call print_string64
     mov al, 10
