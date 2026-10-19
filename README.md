@@ -47,8 +47,8 @@ Never infer a later checkpoint merely because an earlier one appeared.
 
 1. Reproducible BIOS boot image and reliable serial/VGA diagnostics.
 2. Stable protected-mode and x86-64 long-mode transitions with explicit failure checkpoints.
-3. Interrupt handling, memory map, physical memory allocator, and kernel panic reporting.
-4. Keyboard input and a tiny interactive shell (polling PS/2 input; initial commands: `help`, `about`, `clear`, `reboot`).
+3. Minimal IDT and CPU exception reporting; BIOS E820 memory-map discovery is now implemented, while a physical memory allocator and heap remain future work.
+4. Keyboard input and a tiny interactive shell (polling PS/2 input; commands: `help`, `about`, `clear`, `memory`, `reboot`).
 5. Filesystem and persistence.
 6. Graphical environment and applications.
 
