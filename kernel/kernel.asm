@@ -666,9 +666,27 @@ strings_equal64:
 
 
 
-; Install gates for the 32 architecturally defined CPU exception vectors.
+; Build the 32 exception gates at runtime. NASM cannot split a relocatable
+; handler address into high/low pieces in a flat binary with '&' and shifts.
 ; Hardware IRQs remain disabled until an interrupt controller is implemented.
 init_idt64:
+    lea rdi, [rel idt64]
+    lea rsi, [rel isr_table64]
+    mov ecx, 32
+.next_gate:
+    mov rax, [rsi]
+    mov [rdi], ax                 ; offset bits 0..15
+    mov word [rdi + 2], CODE64_SEL
+    mov byte [rdi + 4], 0          ; IST = current stack
+    mov byte [rdi + 5], 0x8E       ; present, ring 0, interrupt gate
+    shr rax, 16
+    mov [rdi + 6], ax             ; offset bits 16..31
+    shr rax, 16
+    mov [rdi + 8], eax            ; offset bits 32..63
+    mov dword [rdi + 12], 0
+    add rsi, 8
+    add rdi, 16
+    loop .next_gate
     lidt [rel idtr64]
     ret
 
@@ -755,50 +773,16 @@ ISR_ERR   29
 ISR_ERR   30
 ISR_NOERR 31
 
-%macro IDT_GATE 1
-    dw %1 & 0xFFFF
-    dw CODE64_SEL
-    db 0
-    db 0x8E
-    dw (%1 >> 16) & 0xFFFF
-    dd (%1 >> 32) & 0xFFFFFFFF
-    dd 0
-%endmacro
+align 8
+isr_table64:
+    dq isr0, isr1, isr2, isr3, isr4, isr5, isr6, isr7
+    dq isr8, isr9, isr10, isr11, isr12, isr13, isr14, isr15
+    dq isr16, isr17, isr18, isr19, isr20, isr21, isr22, isr23
+    dq isr24, isr25, isr26, isr27, isr28, isr29, isr30, isr31
 
 align 16
 idt64:
-    IDT_GATE isr0
-    IDT_GATE isr1
-    IDT_GATE isr2
-    IDT_GATE isr3
-    IDT_GATE isr4
-    IDT_GATE isr5
-    IDT_GATE isr6
-    IDT_GATE isr7
-    IDT_GATE isr8
-    IDT_GATE isr9
-    IDT_GATE isr10
-    IDT_GATE isr11
-    IDT_GATE isr12
-    IDT_GATE isr13
-    IDT_GATE isr14
-    IDT_GATE isr15
-    IDT_GATE isr16
-    IDT_GATE isr17
-    IDT_GATE isr18
-    IDT_GATE isr19
-    IDT_GATE isr20
-    IDT_GATE isr21
-    IDT_GATE isr22
-    IDT_GATE isr23
-    IDT_GATE isr24
-    IDT_GATE isr25
-    IDT_GATE isr26
-    IDT_GATE isr27
-    IDT_GATE isr28
-    IDT_GATE isr29
-    IDT_GATE isr30
-    IDT_GATE isr31
+    times 32 * 16 db 0
 idt64_end:
 
 idtr64:
