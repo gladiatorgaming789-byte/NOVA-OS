@@ -1,6 +1,14 @@
 BITS 16
 ORG 0x1000
 
+; Temporary physical layout for this BIOS prototype. Keep the stack separate
+; from the page-table pages until E820 discovery and a real allocator exist.
+STACK_TOP equ 0x8F000
+PML4_ADDR equ 0x90000
+PDPT_ADDR equ 0x91000
+PD_ADDR   equ 0x92000
+VGA_TEXT_ADDR equ 0xB8000
+
 kernel_entry:
     cli
     xor ax, ax
@@ -124,24 +132,24 @@ protected_mode_entry:
     mov ss, ax
     mov fs, ax
     mov gs, ax
-    mov esp, 0x90000
+    mov esp, STACK_TOP
 
     mov esi, marker_c
     call print32
 
     ; Clear PML4, PDPT, and PD at 0x90000, 0x91000, 0x92000.
     xor eax, eax
-    mov edi, 0x90000
+    mov edi, PML4_ADDR
     mov ecx, (3 * 4096) / 4
     rep stosd
 
-    mov dword [0x90000], 0x91003
-    mov dword [0x90004], 0
-    mov dword [0x91000], 0x92003
-    mov dword [0x91004], 0
+    mov dword [PML4_ADDR], PDPT_ADDR | 3
+    mov dword [PML4_ADDR + 4], 0
+    mov dword [PDPT_ADDR], PD_ADDR | 3
+    mov dword [PDPT_ADDR + 4], 0
 
     ; Identity map first 1 GiB using 512 2-MiB pages.
-    mov edi, 0x92000
+    mov edi, PD_ADDR
     mov eax, 0x00000083
     mov ecx, 512
 .map_pages:
@@ -158,7 +166,7 @@ protected_mode_entry:
     or eax, 1 << 5
     mov cr4, eax
 
-    mov eax, 0x90000
+    mov eax, PML4_ADDR
     mov cr3, eax
 
     mov ecx, 0xC0000080
@@ -245,7 +253,7 @@ long_mode_entry:
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov rsp, 0x90000
+    mov rsp, STACK_TOP
     cld
     mov al, 'L'
     call serial_putc64
@@ -303,7 +311,7 @@ screen_clear64:
     push rax
     push rcx
     push rdi
-    mov rdi, 0xB8000
+    mov rdi, VGA_TEXT_ADDR
     mov ax, 0x0720
     mov ecx, 2000
     rep stosw
@@ -318,11 +326,11 @@ scroll_screen64:
     push rcx
     push rsi
     push rdi
-    mov rsi, 0xB80A0
-    mov rdi, 0xB8000
+    mov rsi, VGA_TEXT_ADDR + 160
+    mov rdi, VGA_TEXT_ADDR
     mov ecx, 1920
     rep movsw
-    mov rdi, 0xB8F00
+    mov rdi, VGA_TEXT_ADDR + 3840
     mov ax, 0x0720
     mov ecx, 80
     rep stosw
