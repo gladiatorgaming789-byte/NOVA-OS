@@ -597,6 +597,11 @@ execute_command64:
     test al, al
     jnz .hfree
     mov rsi, line_buffer
+    mov rdi, command_pmmtest
+    call strings_equal64
+    test al, al
+    jnz .pmmtest
+    mov rsi, line_buffer
     mov rdi, command_uptime
     call strings_equal64
     test al, al
@@ -688,6 +693,42 @@ execute_command64:
     jmp .done
 .free_failed:
     mov rsi, message_free_failed
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+ .pmmtest:
+    ; Reject a frame outside installed/usable RAM, without changing the free count.
+    push r12
+    mov r12d, [rel free_page_count]
+    mov rdi, PMM_LIMIT - 0x1000
+    call pmm_free_page64
+    test eax, eax
+    jnz .pmmtest_failed
+    cmp r12d, [rel free_page_count]
+    jne .pmmtest_failed
+    ; Allocate/free one valid frame, then ensure a second free is rejected.
+    call pmm_alloc_page64
+    test rax, rax
+    jz .pmmtest_failed
+    mov rdi, rax
+    mov r12, rax
+    call pmm_free_page64
+    test eax, eax
+    jz .pmmtest_failed
+    mov rdi, r12
+    call pmm_free_page64
+    test eax, eax
+    jnz .pmmtest_failed
+    pop r12
+    mov rsi, message_pmmtest_pass
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.pmmtest_failed:
+    pop r12
+    mov rsi, message_pmmtest_fail
     call print_string64
     mov al, 10
     call put_char64
@@ -1398,7 +1439,8 @@ command_heap db 'heap', 0
 command_halloc db 'halloc', 0
 command_hfree db 'hfree', 0
 command_uptime db 'uptime', 0
-message_help db 'Commands: help, about, clear, memory, alloc, free, heap, halloc, hfree, uptime, reboot', 0
+command_pmmtest db 'pmmtest', 0
+message_help db 'Commands: help, about, clear, memory, alloc, free, pmmtest, heap, halloc, hfree, uptime, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
 message_memory db 'Firmware E820 entries: 0x', 0
@@ -1409,6 +1451,8 @@ message_alloc_failed db 'No free physical page is available.', 0
 message_freed db 'Freed test page.', 0
 message_free_none db 'No test page is currently allocated.', 0
 message_free_failed db 'Could not free the test page.', 0
+message_pmmtest_pass db 'PMM safety test passed: reserved and double frees rejected.', 0
+message_pmmtest_fail db 'PMM safety test FAILED.', 0
 message_heap_status db 'Heap pages allocated: 0x', 0
 message_heap_allocated db 'Heap allocation at: 0x', 0
 message_heap_already db 'A heap test allocation already exists; use hfree first.', 0
