@@ -2,14 +2,14 @@
 
 **NOVA-OS is an experimental operating system built from scratch for x86-64 PCs and Oracle VirtualBox.** It is not a Linux distribution and does not use the Linux kernel.
 
-> **Status:** early boot-chain prototype. Do not treat this as a complete operating system yet. The immediate goal is a reproducible bootable image with visible diagnostics, followed by a reliable transition into 64-bit long mode.
+> **Status:** early x86-64 kernel prototype with a polling keyboard and a tiny interactive command shell. It is not a complete operating system yet.
 
 ## Project goals
 
 - Custom BIOS boot path and kernel; no Linux kernel or existing OS distribution.
 - Build a bootable disk image for Oracle VirtualBox.
 - Serial and on-screen diagnostics so a failed boot has useful evidence.
-- Small, testable milestones: boot sector → loaded stage → protected mode → long mode → kernel services.
+- Small, testable milestones: boot sector → loaded stage → protected mode → long mode → keyboard input and shell.
 - Reproducible builds and automated static/build checks.
 
 ## Current development focus
@@ -31,7 +31,7 @@ The old ISO and its source are **not currently stored in this repository**, so t
 
 ## Build
 
-The project build scripts and dependencies will be documented here as they are added. The intended baseline is NASM plus a standard host toolchain, producing a raw bootable disk image that VirtualBox can boot as a BIOS VM. EFI should remain disabled until UEFI support is implemented.
+Builds use NASM and xorriso in GitHub Actions. Each successful workflow run publishes a `nova-os-boot-tested-image` artifact containing the rebuilt `build/nova-os.iso`, raw floppy image, checksums, and serial logs. **Use `build/nova-os.iso` from the downloaded artifact ZIP** in VirtualBox; the root-level `nova-os.iso` is retained for comparison and may be an older image. Configure the VM for BIOS boot (EFI off).
 
 ## Testing policy
 
@@ -48,7 +48,7 @@ Never infer a later checkpoint merely because an earlier one appeared.
 1. Reproducible BIOS boot image and reliable serial/VGA diagnostics.
 2. Stable protected-mode and x86-64 long-mode transitions with explicit failure checkpoints.
 3. Interrupt handling, memory map, physical memory allocator, and kernel panic reporting.
-4. Keyboard input and a tiny interactive shell.
+4. Keyboard input and a tiny interactive shell (polling PS/2 input; initial commands: `help`, `about`, `clear`, `reboot`).
 5. Filesystem and persistence.
 6. Graphical environment and applications.
 
