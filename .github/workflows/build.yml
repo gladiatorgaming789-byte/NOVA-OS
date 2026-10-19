@@ -67,6 +67,33 @@ jobs:
             exit 1
           fi
           echo "ISO boot test passed: kernel reached long mode and printed its banner."
+      - name: Test CPU exception diagnostics in QEMU
+        shell: bash
+        run: |
+          set -euo pipefail
+          nasm -D NOVA_TEST_EXCEPTION=1 -f bin kernel/kernel.asm -o build/kernel-exception-test.bin
+          test "$(wc -c < build/kernel-exception-test.bin)" -le 8192
+          dd if=/dev/zero of=build/nova-exception-test.img bs=512 count=2880 status=none
+          dd if=build/boot.bin of=build/nova-exception-test.img conv=notrunc status=none
+          dd if=build/kernel-exception-test.bin of=build/nova-exception-test.img bs=512 seek=1 conv=notrunc status=none
+          set +e
+          timeout 5s qemu-system-x86_64 \
+            -machine pc -m 128M \
+            -drive file=build/nova-exception-test.img,format=raw,if=floppy \
+            -boot a -display none -serial file:build/exception-serial.log \
+            -no-reboot -no-shutdown
+          status=$?
+          set -e
+          if [[ "$status" -ne 124 && "$status" -ne 0 ]]; then
+            echo "Exception test QEMU exited unexpectedly with status $status"
+            exit "$status"
+          fi
+          cat build/exception-serial.log
+          if ! grep -q "NOVA exception vector 0x03" build/exception-serial.log; then
+            echo "Exception test failed: IDT did not report the injected INT3."
+            exit 1
+          fi
+          echo "Exception test passed: INT3 was caught and reported by the IDT."
       - name: Smoke-test interactive shell through QEMU keyboard
         run: python3 scripts/shell-smoke-test.py build/nova-os.img
       - name: Upload bootable ISO, floppy image, and logs
