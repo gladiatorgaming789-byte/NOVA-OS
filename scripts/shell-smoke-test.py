@@ -86,7 +86,7 @@ def main() -> int:
                 raise RuntimeError(f"{description} failed. Captured serial output:\n{captured}")
 
             help_pattern = re.escape(
-                b"Commands: help, about, clear, memory, alloc, free, heap, halloc, hfree, uptime, reboot"
+                b"Commands: help, about, clear, memory, alloc, free, pmmtest, heap, halloc, hfree, uptime, reboot"
             )
             run_command(("h", "e", "l", "p", "ret"), help_pattern, "shell help command")
             print("Shell help check passed.")
@@ -95,6 +95,13 @@ def main() -> int:
             run_command(("m", "e", "m", "o", "r", "y", "ret"), e820_pattern,
                         "E820 memory-map command")
             print("E820 memory map check passed.")
+
+            pmmtest_pattern = re.escape(
+                b"PMM safety test passed: reserved and double frees rejected."
+            )
+            run_command(("p", "m", "m", "t", "e", "s", "t", "ret"),
+                        pmmtest_pattern, "physical allocator safety regression")
+            print("Physical allocator safety regression passed.")
 
             page_alloc_pattern = rb"Allocated physical page: 0x[0-9A-F]{8,16}"
             run_command(("a", "l", "l", "o", "c", "ret"), page_alloc_pattern,
