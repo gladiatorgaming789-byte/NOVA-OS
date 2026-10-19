@@ -27,7 +27,7 @@ The earlier local prototype displayed **B**, **K**, and **E** in VirtualBox, but
 | P | paging / long-mode activation checkpoint |
 | L | 64-bit long-mode entry checkpoint |
 
-The old ISO and its source are **not currently stored in this repository**, so the markers alone are not enough to diagnose that exact binary. This repository is becoming the source of truth going forward.
+The markers alone do not prove that every transition worked. The current source and automated build are the source of truth; use the freshly rebuilt ISO from a successful GitHub Actions artifact rather than an older image.
 
 ## Build
 
