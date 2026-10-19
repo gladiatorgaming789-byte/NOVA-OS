@@ -39,7 +39,7 @@ A successful compilation is not the same as a successful boot. Results will be l
 
 1. **Build check** — source assembles and image layout is valid.
 2. **Emulator boot check** — image is actually run in QEMU or another emulator and reaches the expected marker.
-3. **VirtualBox check** — confirmed by a real VirtualBox boot.
+3. **Interactive shell check** — QEMU sends keyboard input and checks the command response.\n4. **VirtualBox check** — confirmed by a real VirtualBox boot.
 
 Never infer a later checkpoint merely because an earlier one appeared.
 
@@ -57,7 +57,7 @@ Never infer a later checkpoint merely because an earlier one appeared.
 - boot/ — BIOS boot sector and early boot stages.
 - kernel/ — kernel entry and core code.
 - scripts/ — image/build/test helpers.
-- docs/ — architecture notes and debugging procedures.
+- docs/ — architecture notes, debugging procedures, and the [code audit](docs/code-audit.md).
 - .github/workflows/ — automated build checks.
 
 Contributions and bug reports should include the build command, emulator/VirtualBox settings, and the last visible diagnostic marker.
