@@ -9,6 +9,10 @@ command -v nasm >/dev/null 2>&1 || {
   echo "error: NASM is required (https://www.nasm.us/)" >&2
   exit 1
 }
+command -v xorriso >/dev/null 2>&1 || {
+  echo "error: xorriso is required to create the bootable ISO (install package xorriso)." >&2
+  exit 1
+}
 
 nasm -f bin "$ROOT/boot/boot.asm" -o "$OUT/boot.bin"
 nasm -f bin "$ROOT/kernel/kernel.asm" -o "$OUT/kernel.bin"
@@ -28,6 +32,17 @@ fi
 dd if=/dev/zero of="$OUT/nova-os.img" bs=512 count=2880 status=none
 dd if="$OUT/boot.bin" of="$OUT/nova-os.img" conv=notrunc status=none
 dd if="$OUT/kernel.bin" of="$OUT/nova-os.img" bs=512 seek=1 conv=notrunc status=none
-sha256sum "$OUT/nova-os.img" > "$OUT/SHA256SUMS.txt"
-printf 'Built: %s\nBoot sector: %s bytes\nKernel: %s bytes\n' "$OUT/nova-os.img" "$boot_size" "$kernel_size"
-echo "This is a raw floppy image, not an ISO. Attach it as a floppy in VirtualBox."
+# Put the complete 1.44 MiB floppy image in the ISO as an El Torito floppy
+# emulation boot image. This preserves the BIOS INT 13h floppy reads used by
+# the boot sector; a no-emulation CD image would not satisfy that assumption.
+ISO_ROOT="$OUT/iso-root"
+mkdir -p "$ISO_ROOT"
+cp "$OUT/nova-os.img" "$ISO_ROOT/nova-os.img"
+xorriso -as mkisofs \
+  -o "$OUT/nova-os.iso" \
+  -V NOVA_OS \
+  -b nova-os.img \
+  -c boot.cat \
+  "$ISO_ROOT" >/dev/null
+sha256sum "$OUT/nova-os.img" "$OUT/nova-os.iso" > "$OUT/SHA256SUMS.txt"
+printf 'Built floppy image: %s\nBootable ISO: %s\nBoot sector: %s bytes\nKernel: %s bytes\n' "$OUT/nova-os.img" "$OUT/nova-os.iso" "$boot_size" "$kernel_size"
