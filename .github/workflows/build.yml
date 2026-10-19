@@ -106,3 +106,4 @@ jobs:
             build/SHA256SUMS.txt
             build/serial.log
             build/iso-serial.log
+            build/exception-serial.log
