@@ -23,8 +23,8 @@ if [[ "$boot_size" -ne 512 ]]; then
   echo "error: boot sector must be 512 bytes, got $boot_size" >&2
   exit 1
 fi
-if [[ "$kernel_size" -gt 8192 ]]; then
-  echo "error: kernel is larger than the 16 sectors loaded by the bootloader ($kernel_size bytes)" >&2
+if [[ "$kernel_size" -gt 262144 ]]; then
+  echo "error: kernel exceeds the bootloader's 512-sector (256 KiB) load limit ($kernel_size bytes)" >&2
   exit 1
 fi
 
