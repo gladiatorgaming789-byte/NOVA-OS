@@ -12,7 +12,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
       - name: Install NASM and QEMU
-        run: sudo apt-get update && sudo apt-get install -y nasm qemu-system-x86
+        run: sudo apt-get update && sudo apt-get install -y nasm xorriso qemu-system-x86
       - name: Assemble boot sector and kernel image
         run: bash scripts/build.sh
       - name: Boot-test in QEMU
@@ -37,11 +37,35 @@ jobs:
             exit 1
           fi
           echo "Boot test passed: kernel reached 64-bit long mode (L)."
-      - name: Upload bootable floppy image and serial log
+      - name: Boot-test ISO in QEMU
+        shell: bash
+        run: |
+          set +e
+          timeout 8s qemu-system-x86_64 \
+            -machine pc -m 128M \
+            -cdrom build/nova-os.iso -boot d \
+            -display none -serial file:build/iso-serial.log \
+            -no-reboot -no-shutdown
+          status=$?
+          set -e
+          if [[ "$status" -ne 124 && "$status" -ne 0 ]]; then
+            echo "QEMU ISO boot exited unexpectedly with status $status"
+            exit "$status"
+          fi
+          echo "ISO COM1 checkpoint log:"
+          cat build/iso-serial.log || true
+          if ! grep -q "EGCJPL" build/iso-serial.log; then
+            echo "ISO boot test failed: expected checkpoints EGCJPL."
+            exit 1
+          fi
+          echo "ISO boot test passed: kernel reached 64-bit long mode (L)."
+      - name: Upload bootable ISO, floppy image, and logs
         uses: actions/upload-artifact@v4
         with:
           name: nova-os-boot-tested-image
           path: |
+            build/nova-os.iso
             build/nova-os.img
             build/SHA256SUMS.txt
             build/serial.log
+            build/iso-serial.log
