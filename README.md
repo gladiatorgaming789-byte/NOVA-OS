@@ -9,7 +9,8 @@
 - Custom BIOS boot path and kernel; no Linux kernel or existing OS distribution.
 - Build a bootable disk image for Oracle VirtualBox.
 - Serial and on-screen diagnostics so a failed boot has useful evidence.
-- Small, testable milestones: boot sector → loaded stage → protected mode → long mode → keyboard input and shell.
+- Small, testable milestones: BIOS boot → protected mode → long mode → keyboard input and shell.
+- Expandable kernel load (up to 256 KiB) while preserving the BIOS floppy-emulation boot path.
 - Reproducible builds and automated static/build checks.
 
 ## Current development focus
@@ -50,11 +51,8 @@ Never infer a later checkpoint merely because an earlier one appeared.
 3. Minimal IDT, CPU exception reporting, PIC/PIT interrupts, and queued PS/2 keyboard input.
 4. BIOS E820 memory-map discovery and a bitmap allocator for 4 KiB physical pages below 1 GiB. The `memory` command reports free pages; `alloc` and `free` exercise a test allocation.
 5. A page-backed kernel heap with 16-byte-aligned allocations, block reuse, adjacent-block coalescing, and `heap`, `halloc`, and `hfree` diagnostics. This is an early first-fit heap, not yet a general-purpose or concurrency-safe allocator.
-6. More flexible page-table management and virtual-memory protection.
-7. Preemptive multitasking and scheduler.
-8. Filesystem and persistence.
-9. User programs and system calls.
-10. Graphical environment, applications, networking, and broader device support.
+6. Integrated command-line OS milestone (development plan in [docs/command-line-os-milestone.md](docs/command-line-os-milestone.md)): virtual-memory protection, preemptive multitasking, user programs and system calls, persistent storage, and a user-space shell.
+7. Graphical environment, applications, networking, and broader device support.
 
 ## Repository layout
 
