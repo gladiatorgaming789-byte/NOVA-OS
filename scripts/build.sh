@@ -28,6 +28,10 @@ if [[ "$kernel_size" -gt 262144 ]]; then
   exit 1
 fi
 
+# Patch the sector count so the BIOS loader reads only the sectors occupied by
+# this kernel, while retaining the 256 KiB hard safety limit.
+python3 "$ROOT/scripts/patch-boot-sector.py" "$OUT/boot.bin" "$kernel_size"
+
 # 1.44 MiB floppy image; kernel starts at sector 2.
 dd if=/dev/zero of="$OUT/nova-os.img" bs=512 count=2880 status=none
 dd if="$OUT/boot.bin" of="$OUT/nova-os.img" conv=notrunc status=none
