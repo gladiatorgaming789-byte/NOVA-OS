@@ -4,6 +4,8 @@ ORG 0x7C00
 KERNEL_SEG equ 0x0000
 KERNEL_OFF equ 0x1000
 KERNEL_SECTORS equ 512           ; 256 KiB maximum kernel image
+KERNEL_COUNT_SIGNATURE db 'NOVA_KSEC'
+kernel_sector_limit dw KERNEL_SECTORS
 SECTORS_PER_TRACK equ 18
 HEADS_PER_CYLINDER equ 2
 
@@ -22,7 +24,8 @@ start:
 
     ; Read track-bounded chunks. A chunk never crosses a 64 KiB ES:BX
     ; boundary, avoiding slow single-sector BIOS calls and DMA boundary bugs.
-    mov word [sectors_remaining], KERNEL_SECTORS
+    mov ax, [kernel_sector_limit]
+    mov [sectors_remaining], ax
     mov byte [current_sector], 2
     mov byte [current_head], 0
     mov byte [current_cylinder], 0
