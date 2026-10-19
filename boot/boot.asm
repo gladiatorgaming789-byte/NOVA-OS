@@ -19,7 +19,10 @@ start:
     call print_string
 
     ; Read sectors 2..17 into physical address 0x1000.
-    mov ax, KERNEL_SEG
+    ; Retry three times and reset the BIOS disk subsystem between failures.
+    mov byte [disk_retries], 3
+.read_kernel:
+    xor ax, ax
     mov es, ax
     mov bx, KERNEL_OFF
     mov ah, 0x02
@@ -29,8 +32,16 @@ start:
     mov dh, 0
     mov dl, [boot_drive]
     int 0x13
-    jc disk_error
+    jnc .kernel_loaded
 
+    xor ah, ah
+    mov dl, [boot_drive]
+    int 0x13
+    dec byte [disk_retries]
+    jnz .read_kernel
+    jmp disk_error
+
+.kernel_loaded:
     mov si, marker_k
     call print_string
     jmp KERNEL_SEG:KERNEL_OFF
@@ -55,6 +66,7 @@ print_string:
     ret
 
 boot_drive db 0
+disk_retries db 0
 marker_b db 'B', 0
 marker_k db 'K', 0
 marker_error db 'D', 0
