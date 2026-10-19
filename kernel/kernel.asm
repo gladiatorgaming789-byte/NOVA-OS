@@ -301,6 +301,7 @@ long_mode_entry:
     call init_idt64
     call pic_init64
     call pit_init64
+    call pmm_init64
 %ifdef NOVA_TEST_EXCEPTION
     int3                         ; CI-only fault injection validates the IDT.
 %endif
@@ -571,6 +572,16 @@ execute_command64:
     test al, al
     jnz .memory
     mov rsi, line_buffer
+    mov rdi, command_alloc
+    call strings_equal64
+    test al, al
+    jnz .alloc
+    mov rsi, line_buffer
+    mov rdi, command_free
+    call strings_equal64
+    test al, al
+    jnz .free
+    mov rsi, line_buffer
     mov rdi, command_uptime
     call strings_equal64
     test al, al
@@ -601,11 +612,68 @@ execute_command64:
     mov al, 10
     call put_char64
     jmp .done
-.memory:
+ .memory:
     mov rsi, message_memory
     call print_string64
     mov ax, [e820_count]
     call print_hex16
+    mov al, 10
+    call put_char64
+    mov rsi, message_free_pages
+    call print_string64
+    mov eax, [free_page_count]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    jmp .done
+.alloc:
+    cmp qword [test_alloc_page], 0
+    jne .alloc_already
+    call pmm_alloc_page64
+    test rax, rax
+    jz .alloc_failed
+    mov [test_alloc_page], rax
+    mov rsi, message_allocated
+    call print_string64
+    mov eax, [test_alloc_page]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    jmp .done
+.alloc_already:
+    mov rsi, message_alloc_already
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.alloc_failed:
+    mov rsi, message_alloc_failed
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.free:
+    mov rdi, [test_alloc_page]
+    test rdi, rdi
+    jz .free_none
+    call pmm_free_page64
+    test eax, eax
+    jz .free_failed
+    mov qword [test_alloc_page], 0
+    mov rsi, message_freed
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.free_none:
+    mov rsi, message_free_none
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.free_failed:
+    mov rsi, message_free_failed
+    call print_string64
     mov al, 10
     call put_char64
     jmp .done
@@ -705,6 +773,174 @@ strings_equal64:
     ret
 
 
+
+; Physical memory manager: bitmap tracks the first 1 GiB in 4 KiB pages.
+; Bitmap bit 1 = reserved/allocated; bit 0 = available. Keep low 1 MiB
+; reserved for firmware data, the loaded kernel, stack, and page tables.
+%define PMM_BITMAP       0x60000
+%define PMM_BITMAP_SIZE  32768
+%define PMM_PAGE_COUNT   262144
+%define PMM_FIRST_PAGE   256
+%define PMM_LIMIT        0x40000000
+
+pmm_init64:
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    mov edi, PMM_BITMAP
+    mov ecx, PMM_BITMAP_SIZE
+    mov al, 0xFF
+    rep stosb
+    mov dword [rel free_page_count], 0
+    movzx ebp, word [rel e820_count]
+    mov esi, 0x5000
+.entry:
+    test ebp, ebp
+    jz .done
+    cmp dword [rsi + 16], 1
+    jne .next
+    ; This simple allocator manages only addresses below 1 GiB.
+    cmp dword [rsi + 4], 0
+    jne .next
+    mov eax, [rsi]
+    cmp eax, PMM_LIMIT
+    jae .next
+    cmp dword [rsi + 12], 0
+    jne .cap_end
+    mov edx, [rsi + 8]
+    add rdx, rax
+    jc .cap_end
+    cmp rdx, PMM_LIMIT
+    ja .cap_end
+    jmp .have_end
+.cap_end:
+    mov edx, PMM_LIMIT
+.have_end:
+    add eax, 0xFFF
+    shr eax, 12                 ; ceil(base / page_size)
+    cmp eax, PMM_FIRST_PAGE
+    jae .start_ready
+    mov eax, PMM_FIRST_PAGE
+.start_ready:
+    shr rdx, 12                 ; floor(end / page_size)
+    mov r8d, eax                ; current page
+    mov r9d, edx                ; exclusive end page
+.mark_page:
+    cmp r8d, r9d
+    jae .next
+    mov r10d, r8d
+    shr r10d, 3
+    mov ecx, r8d
+    and ecx, 7
+    mov r11d, 1
+    shl r11d, cl
+    mov al, [rdi + r10]
+    test al, r11b
+    jz .already_free
+    and al, ~r11b
+    mov [rdi + r10], al
+    inc dword [rel free_page_count]
+.already_free:
+    inc r8d
+    jmp .mark_page
+.next:
+    add rsi, 24
+    dec ebp
+    jmp .entry
+.done:
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    ret
+
+; Allocate one 4 KiB physical page. Returns its address in RAX, or zero.
+pmm_alloc_page64:
+    push rbx
+    push r8
+    push r9
+    push r10
+    push r11
+    mov r8d, PMM_BITMAP
+    mov r9d, PMM_FIRST_PAGE
+.scan:
+    cmp r9d, PMM_PAGE_COUNT
+    jae .no_page
+    mov r10d, r9d
+    shr r10d, 3
+    mov ecx, r9d
+    and ecx, 7
+    mov r11d, 1
+    shl r11d, cl
+    mov al, [r8 + r10]
+    test al, r11b
+    jz .allocate
+    inc r9d
+    jmp .scan
+.allocate:
+    or al, r11b
+    mov [r8 + r10], al
+    dec dword [rel free_page_count]
+    mov eax, r9d
+    shl rax, 12
+    jmp .return
+.no_page:
+    xor eax, eax
+.return:
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbx
+    ret
+
+; Free an aligned page address in RDI. Returns EAX=1 on success, else zero.
+pmm_free_page64:
+    push rbx
+    push r8
+    push r9
+    push r10
+    push r11
+    xor eax, eax
+    test rdi, 0xFFF
+    jnz .return
+    cmp rdi, 0x100000
+    jb .return
+    cmp rdi, PMM_LIMIT
+    jae .return
+    mov r8d, PMM_BITMAP
+    mov r9d, edi
+    shr r9d, 12
+    mov r10d, r9d
+    shr r10d, 3
+    mov ecx, r9d
+    and ecx, 7
+    mov r11d, 1
+    shl r11d, cl
+    mov al, [r8 + r10]
+    test al, r11b
+    jz .return
+    not r11b
+    and al, r11b
+    mov [r8 + r10], al
+    inc dword [rel free_page_count]
+    mov eax, 1
+.return:
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbx
+    ret
 
 ; Build 32 exception gates and IRQ0/IRQ1 gates at runtime.
 init_idt64:
@@ -915,11 +1151,20 @@ command_about db 'about', 0
 command_clear db 'clear', 0
 command_reboot db 'reboot', 0
 command_memory db 'memory', 0
+command_alloc db 'alloc', 0
+command_free db 'free', 0
 command_uptime db 'uptime', 0
-message_help db 'Commands: help, about, clear, memory, uptime, reboot', 0
+message_help db 'Commands: help, about, clear, memory, alloc, free, uptime, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
 message_memory db 'Firmware E820 entries: 0x', 0
+message_free_pages db 'Free 4KiB pages: 0x', 0
+message_allocated db 'Allocated physical page: 0x', 0
+message_alloc_already db 'A test page is already allocated; use free first.', 0
+message_alloc_failed db 'No free physical page is available.', 0
+message_freed db 'Freed test page.', 0
+message_free_none db 'No test page is currently allocated.', 0
+message_free_failed db 'Could not free the test page.', 0
 message_uptime db 'PIT timer ticks: 0x', 0
 message_reboot db 'Rebooting NOVA OS...', 0
 message_reboot_failed db 'Reboot controller timed out; system halted safely.', 0
@@ -932,6 +1177,8 @@ key_queue_tail db 0
 key_queue times 64 db 0
 align 4
 timer_ticks dd 0
+free_page_count dd 0
+test_alloc_page dq 0
 line_buffer times 128 db 0
 scan_ascii:
     db 0,0,'1','2','3','4','5','6','7','8','9','0','-','=',8,0
