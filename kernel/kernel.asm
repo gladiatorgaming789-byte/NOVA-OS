@@ -826,7 +826,7 @@ command_about db 'about', 0
 command_clear db 'clear', 0
 command_reboot db 'reboot', 0
 command_memory db 'memory', 0
-message_help db 'Commands: help, about, clear, reboot', 0
+message_help db 'Commands: help, about, clear, memory, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
 message_memory db 'Firmware E820 entries: 0x', 0
