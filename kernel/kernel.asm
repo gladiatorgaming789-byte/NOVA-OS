@@ -174,6 +174,30 @@ protected_mode_entry:
     call print32
     jmp CODE64_SEL:long_mode_entry
 
+; 32-bit COM1 output routine (must be encoded for protected mode).
+serial_putc32:
+    push eax
+    push ecx
+    push edx
+    mov ah, al
+    mov dx, 0x3FD
+    mov ecx, 0xFFFF
+.wait:
+    in al, dx
+    test al, 0x20
+    jnz .ready
+    loop .wait
+    jmp .done
+.ready:
+    mov dx, 0x3F8
+    mov al, ah
+    out dx, al
+.done:
+    pop edx
+    pop ecx
+    pop eax
+    ret
+
 print32:
     lodsb
     test al, al
@@ -183,7 +207,7 @@ print32:
     mov edx, [vga_cursor]
     mov [ebx + edx], ax
     push eax
-    call serial_putc
+    call serial_putc32
     pop eax
     add edx, 2
     mov [vga_cursor], edx
@@ -192,6 +216,30 @@ print32:
     ret
 
 BITS 64
+; 64-bit COM1 output routine.
+serial_putc64:
+    push rax
+    push rcx
+    push rdx
+    mov ah, al
+    mov dx, 0x3FD
+    mov ecx, 0xFFFF
+.wait:
+    in al, dx
+    test al, 0x20
+    jnz .ready
+    loop .wait
+    jmp .done
+.ready:
+    mov dx, 0x3F8
+    mov al, ah
+    out dx, al
+.done:
+    pop rdx
+    pop rcx
+    pop rax
+    ret
+
 long_mode_entry:
     mov ax, DATA64_SEL
     mov ds, ax
@@ -203,7 +251,7 @@ long_mode_entry:
     mov ah, 0x0A
     mov [rdi + 14], ax
     mov al, 'L'
-    call serial_putc
+    call serial_putc64
 .halt:
     cli
     hlt
