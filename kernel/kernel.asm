@@ -1048,7 +1048,7 @@ kmalloc64:
     mov rax, [r13]
     test rax, HEAP_USED_BIT
     jnz .next
-    and rax, HEAP_SIZE_MASK
+    btr rax, 63
     cmp rax, r12
     jae .found
 .next:
@@ -1123,7 +1123,7 @@ kfree64:
     mov rbx, [r13]
     test rbx, HEAP_USED_BIT
     jz .return
-    and rbx, HEAP_SIZE_MASK
+    btr rbx, 63
     mov [r13], rbx
     ; Coalesce adjacent free blocks in list order.
     mov r13, [rel heap_head]
@@ -1143,7 +1143,7 @@ kfree64:
     add rdx, rax
     cmp rdx, rbx
     jne .coalesce_next
-    and rcx, HEAP_SIZE_MASK
+    btr rcx, 63
     add rax, 16
     add rax, rcx
     mov [r13], rax
