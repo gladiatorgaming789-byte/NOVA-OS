@@ -796,6 +796,7 @@ pmm_init64:
     mov ecx, PMM_BITMAP_SIZE
     mov al, 0xFF
     rep stosb
+    mov edi, PMM_BITMAP
     mov dword [rel free_page_count], 0
     movzx ebp, word [rel e820_count]
     mov esi, 0x5000
