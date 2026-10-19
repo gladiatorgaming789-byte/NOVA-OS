@@ -8,6 +8,8 @@ PML4_ADDR equ 0x90000
 PDPT_ADDR equ 0x91000
 PD_ADDR   equ 0x92000
 VGA_TEXT_ADDR equ 0xB8000
+TASK1_STACK_TOP equ 0x88000
+TASK2_STACK_TOP equ 0x8C000
 
 kernel_entry:
     cli
@@ -1251,11 +1253,11 @@ kfree64:
 ; tasks 1 and 2 are timer-preempted worker loops used to verify context switching.
 scheduler_init64:
     mov qword [rel task_rsp], 0
-    lea rdi, [rel task1_stack_top]
+    mov rdi, TASK1_STACK_TOP
     lea rsi, [rel scheduler_worker_a64]
     call scheduler_build_frame64
     mov [rel task_rsp + 8], rax
-    lea rdi, [rel task2_stack_top]
+    mov rdi, TASK2_STACK_TOP
     lea rsi, [rel scheduler_worker_b64]
     call scheduler_build_frame64
     mov [rel task_rsp + 16], rax
@@ -1604,10 +1606,6 @@ align 8
 task_rsp times 3 dq 0
 scheduler_counter_a dq 0
 scheduler_counter_b dq 0
-task1_stack times 4096 db 0
-task1_stack_top:
-task2_stack times 4096 db 0
-task2_stack_top:
 line_buffer times 128 db 0
 scan_ascii:
     db 0,0,'1','2','3','4','5','6','7','8','9','0','-','=',8,0
