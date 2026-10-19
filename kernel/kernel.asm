@@ -1385,6 +1385,8 @@ irq0_handler64:
     push r13
     push r14
     push r15
+    mov al, '1'
+    call serial_putc64
     inc dword [rel timer_ticks]
     movzx eax, byte [rel current_task_index]
     lea rdx, [rel task_rsp]
@@ -1398,8 +1400,12 @@ irq0_handler64:
     movzx eax, al
     lea rdx, [rel task_rsp]
     mov rsp, [rdx + rax*8]
+    mov al, '2'
+    call serial_putc64
     mov al, 0x20
     out 0x20, al
+    mov al, '3'
+    call serial_putc64
     pop r15
     pop r14
     pop r13
