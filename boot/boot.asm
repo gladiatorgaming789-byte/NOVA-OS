@@ -49,6 +49,8 @@ start:
     jmp disk_error
 
 .sector_loaded:
+    mov al, '.'
+    call serial_putc16
     add bx, 512
     jnc .advance_chs
     mov ax, es
