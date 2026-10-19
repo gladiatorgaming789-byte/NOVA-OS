@@ -1,1 +1,63 @@
 # NOVA-OS
+
+**NOVA-OS is an experimental operating system built from scratch for x86-64 PCs and Oracle VirtualBox.** It is not a Linux distribution and does not use the Linux kernel.
+
+> **Status:** early boot-chain prototype. Do not treat this as a complete operating system yet. The immediate goal is a reproducible bootable image with visible diagnostics, followed by a reliable transition into 64-bit long mode.
+
+## Project goals
+
+- Custom BIOS boot path and kernel; no Linux kernel or existing OS distribution.
+- Build a bootable disk image for Oracle VirtualBox.
+- Serial and on-screen diagnostics so a failed boot has useful evidence.
+- Small, testable milestones: boot sector → loaded stage → protected mode → long mode → kernel services.
+- Reproducible builds and automated static/build checks.
+
+## Current development focus
+
+The earlier local prototype displayed **B**, **K**, and **E** in VirtualBox, but did not show later checkpoints. Those letters were intended as diagnostics, not proof that every later CPU-mode transition works:
+
+| Marker | Intended meaning |
+| --- | --- |
+| B | BIOS boot sector began executing |
+| K | boot code reached its kernel/stage loading checkpoint |
+| E | loaded code reached its entry point |
+| G | GDT / protected-mode setup checkpoint |
+| C | protected-mode checkpoint |
+| J | long-mode preparation checkpoint |
+| P | paging / long-mode activation checkpoint |
+| L | 64-bit long-mode entry checkpoint |
+
+The old ISO and its source are **not currently stored in this repository**, so the markers alone are not enough to diagnose that exact binary. This repository is becoming the source of truth going forward.
+
+## Build
+
+The project build scripts and dependencies will be documented here as they are added. The intended baseline is NASM plus a standard host toolchain, producing a raw bootable disk image that VirtualBox can boot as a BIOS VM. EFI should remain disabled until UEFI support is implemented.
+
+## Testing policy
+
+A successful compilation is not the same as a successful boot. Results will be labeled separately:
+
+1. **Build check** — source assembles and image layout is valid.
+2. **Emulator boot check** — image is actually run in QEMU or another emulator and reaches the expected marker.
+3. **VirtualBox check** — confirmed by a real VirtualBox boot.
+
+Never infer a later checkpoint merely because an earlier one appeared.
+
+## Planned milestones
+
+1. Reproducible BIOS boot image and reliable serial/VGA diagnostics.
+2. Stable protected-mode and x86-64 long-mode transitions with explicit failure checkpoints.
+3. Interrupt handling, memory map, physical memory allocator, and kernel panic reporting.
+4. Keyboard input and a tiny interactive shell.
+5. Filesystem and persistence.
+6. Graphical environment and applications.
+
+## Repository layout
+
+- boot/ — BIOS boot sector and early boot stages.
+- kernel/ — kernel entry and core code.
+- scripts/ — image/build/test helpers.
+- docs/ — architecture notes and debugging procedures.
+- .github/workflows/ — automated build checks.
+
+Contributions and bug reports should include the build command, emulator/VirtualBox settings, and the last visible diagnostic marker.
