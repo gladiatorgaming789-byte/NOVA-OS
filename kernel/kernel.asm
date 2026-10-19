@@ -211,7 +211,7 @@ print32:
     pop eax
     add edx, 2
     mov [vga_cursor], edx
-    ret
+    jmp print32
 .done:
     ret
 
