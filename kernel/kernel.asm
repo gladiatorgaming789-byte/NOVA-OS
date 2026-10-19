@@ -843,7 +843,8 @@ pmm_init64:
     mov al, [rdi + r10]
     test al, r11b
     jz .already_free
-    and al, ~r11b
+    not r11b
+    and al, r11b
     mov [rdi + r10], al
     inc dword [rel free_page_count]
 .already_free:
