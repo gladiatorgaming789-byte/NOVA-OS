@@ -19,6 +19,7 @@ kernel_entry:
     call serial_init
     mov si, marker_e
     call print16
+    call collect_e820
 
     ; Enable A20 using the fast A20 gate.
     in al, 0x92
@@ -100,6 +101,44 @@ print16:
     pop ax
     jmp print16
 .done:
+    ret
+
+
+; Collect the BIOS E820 memory map into physical 0x5000 (up to 32 entries).
+; Each entry is 24 bytes. This is discovery only; no allocator uses it yet.
+collect_e820:
+    pushad
+    push es
+    xor ax, ax
+    mov es, ax
+    mov word [e820_count], 0
+    mov dword [e820_continuation], 0
+.next_entry:
+    cmp word [e820_count], 32
+    jae .done
+    mov ax, [e820_count]
+    mov dx, 24
+    mul dx
+    add ax, 0x5000
+    mov di, ax
+    mov dword [es:di + 20], 1
+    mov eax, 0xE820
+    mov edx, 0x534D4150
+    mov ecx, 24
+    mov ebx, [e820_continuation]
+    int 0x15
+    jc .done
+    cmp eax, 0x534D4150
+    jne .done
+    cmp ecx, 20
+    jb .done
+    inc word [e820_count]
+    mov [e820_continuation], ebx
+    test ebx, ebx
+    jnz .next_entry
+.done:
+    pop es
+    popad
     ret
 
 align 8
@@ -543,6 +582,14 @@ execute_command64:
     mov al, 10
     call put_char64
     jmp .done
+.memory:
+    mov rsi, message_memory
+    call print_string64
+    mov ax, [e820_count]
+    call print_hex16
+    mov al, 10
+    call put_char64
+    jmp .done
 .reboot:
     mov rsi, message_reboot
     call print_string64
@@ -572,6 +619,23 @@ execute_command64:
     ret
 
 ; AL=1 when the zero-terminated strings match; otherwise AL=0.
+print_hex16:
+    push rbx
+    push rcx
+    mov bx, ax
+    mov ecx, 4
+.hex_digit:
+    mov eax, ebx
+    shr eax, 12
+    and eax, 0x0F
+    mov al, [hex_digits64 + rax]
+    call put_char64
+    shl bx, 4
+    loop .hex_digit
+    pop rcx
+    pop rbx
+    ret
+
 strings_equal64:
     push rsi
     push rdi
@@ -741,6 +805,8 @@ hex_digits64 db '0123456789ABCDEF'
 
 BITS 16
 vga_cursor dd 8
+e820_count dw 0
+e820_continuation dd 0
 marker_e db 'E', 0
 marker_g db 'G', 0
 BITS 32
@@ -754,9 +820,11 @@ command_help db 'help', 0
 command_about db 'about', 0
 command_clear db 'clear', 0
 command_reboot db 'reboot', 0
+command_memory db 'memory', 0
 message_help db 'Commands: help, about, clear, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
+message_memory db 'Firmware E820 entries: 0x', 0
 message_reboot db 'Rebooting NOVA OS...', 0
 message_reboot_failed db 'Reboot controller timed out; system halted safely.', 0
 line_length dd 0
