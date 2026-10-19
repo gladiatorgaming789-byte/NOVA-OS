@@ -8,8 +8,6 @@ PML4_ADDR equ 0x90000
 PDPT_ADDR equ 0x91000
 PD_ADDR   equ 0x92000
 VGA_TEXT_ADDR equ 0xB8000
-TASK1_STACK_TOP equ 0x88000
-TASK2_STACK_TOP equ 0x8C000
 
 kernel_entry:
     cli
@@ -305,20 +303,11 @@ long_mode_entry:
     call pic_init64
     call pit_init64
     call pmm_init64
-    mov al, 'S'
-    call serial_putc64
-    call scheduler_init64
-    mov al, 'T'
-    call serial_putc64
 %ifdef NOVA_TEST_EXCEPTION
     int3                         ; CI-only fault injection validates the IDT.
 %endif
     call screen_clear64
-    mov al, 'U'
-    call serial_putc64
     sti
-    mov al, 'V'
-    call serial_putc64
     mov rsi, banner64
     call print_string64
     mov al, 10
@@ -614,11 +603,6 @@ execute_command64:
     test al, al
     jnz .pmmtest
     mov rsi, line_buffer
-    mov rdi, command_schedtest
-    call strings_equal64
-    test al, al
-    jnz .schedtest
-    mov rsi, line_buffer
     mov rdi, command_uptime
     call strings_equal64
     test al, al
@@ -746,22 +730,6 @@ execute_command64:
 .pmmtest_failed:
     pop r12
     mov rsi, message_pmmtest_fail
-    call print_string64
-    mov al, 10
-    call put_char64
-    jmp .done
- .schedtest:
-    cmp qword [rel scheduler_counter_a], 0
-    je .schedtest_failed
-    cmp qword [rel scheduler_counter_b], 0
-    je .schedtest_failed
-    mov rsi, message_schedtest_pass
-    call print_string64
-    mov al, 10
-    call put_char64
-    jmp .done
-.schedtest_failed:
-    mov rsi, message_schedtest_fail
     call print_string64
     mov al, 10
     call put_char64
@@ -1257,65 +1225,6 @@ kfree64:
     pop rbx
     ret
 
-; Minimal round-robin kernel scheduler. Task 0 is the booted shell context;
-; tasks 1 and 2 are timer-preempted worker loops used to verify context switching.
-scheduler_init64:
-    mov qword [rel task_rsp], 0
-    mov rdi, TASK1_STACK_TOP
-    mov rsi, scheduler_worker_a64
-    call scheduler_build_frame64
-    mov [rel task_rsp + 8], rax
-    mov rdi, TASK2_STACK_TOP
-    mov rsi, scheduler_worker_b64
-    call scheduler_build_frame64
-    mov [rel task_rsp + 16], rax
-    mov byte [rel current_task_index], 0
-    ret
-
-; RDI = stack top, RSI = entry point. Return a fabricated interrupt-frame RSP.
-scheduler_build_frame64:
-    push rbx
-    mov rbx, rsp
-    mov rsp, rdi
-    push qword 0x202
-    push qword CODE64_SEL
-    push rsi
-    push qword 0                 ; RAX
-    push qword 0                 ; RCX
-    push qword 0                 ; RDX
-    push qword 0                 ; RBX
-    push qword 0                 ; RBP
-    push qword 0                 ; RSI
-    push qword 0                 ; RDI
-    push qword 0                 ; R8
-    push qword 0                 ; R9
-    push qword 0                 ; R10
-    push qword 0                 ; R11
-    push qword 0                 ; R12
-    push qword 0                 ; R13
-    push qword 0                 ; R14
-    push qword 0                 ; R15
-    mov rax, rsp
-    mov rsp, rbx
-    pop rbx
-    ret
-
-scheduler_worker_a64:
-    mov al, 'A'
-    call serial_putc64
-.loop:
-    inc qword [rel scheduler_counter_a]
-    pause
-    jmp .loop
-
-scheduler_worker_b64:
-    mov al, 'B'
-    call serial_putc64
-.loop:
-    inc qword [rel scheduler_counter_b]
-    pause
-    jmp .loop
-
 ; Build 32 exception gates and IRQ0/IRQ1 gates at runtime.
 init_idt64:
     lea rdi, [rel idt64]
@@ -1373,57 +1282,10 @@ pit_init64:
 ; IRQ0 increments a 32-bit tick counter; IRQ1 queues the keyboard scancode.
 ; Preserve every general register that the interrupted kernel may be using.
 irq0_handler64:
-    ; Save a complete resumable kernel context and the iretq CPU frame.
     push rax
-    push rcx
-    push rdx
-    push rbx
-    push rbp
-    push rsi
-    push rdi
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-    mov al, '1'
-    call serial_putc64
     inc dword [rel timer_ticks]
-    movzx eax, byte [rel current_task_index]
-    lea rdx, [rel task_rsp]
-    mov [rdx + rax*8], rsp
-    inc al
-    cmp al, 3
-    jb .next_task_ready
-    xor al, al
-.next_task_ready:
-    mov [rel current_task_index], al
-    movzx eax, al
-    lea rdx, [rel task_rsp]
-    mov rsp, [rdx + rax*8]
-    mov al, '2'
-    call serial_putc64
     mov al, 0x20
     out 0x20, al
-    mov al, '3'
-    call serial_putc64
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rdi
-    pop rsi
-    pop rbp
-    pop rbx
-    pop rdx
-    pop rcx
     pop rax
     iretq
 
@@ -1579,8 +1441,7 @@ command_halloc db 'halloc', 0
 command_hfree db 'hfree', 0
 command_uptime db 'uptime', 0
 command_pmmtest db 'pmmtest', 0
-command_schedtest db 'schedtest', 0
-message_help db 'Commands: help, about, clear, memory, alloc, free, pmmtest, schedtest, heap, halloc, hfree, uptime, reboot', 0
+message_help db 'Commands: help, about, clear, memory, alloc, free, pmmtest, heap, halloc, hfree, uptime, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
 message_memory db 'Firmware E820 entries: 0x', 0
@@ -1593,8 +1454,6 @@ message_free_none db 'No test page is currently allocated.', 0
 message_free_failed db 'Could not free the test page.', 0
 message_pmmtest_pass db 'PMM safety test passed: reserved and double frees rejected.', 0
 message_pmmtest_fail db 'PMM safety test FAILED.', 0
-message_schedtest_pass db 'Scheduler test passed: both preempted tasks made progress.', 0
-message_schedtest_fail db 'Scheduler test FAILED: a worker task did not run.', 0
 message_heap_status db 'Heap pages allocated: 0x', 0
 message_heap_allocated db 'Heap allocation at: 0x', 0
 message_heap_already db 'A heap test allocation already exists; use hfree first.', 0
@@ -1619,11 +1478,6 @@ test_alloc_page dq 0
 heap_head dq 0
 heap_pages dd 0
 test_heap_ptr dq 0
-current_task_index db 0
-align 8
-task_rsp times 3 dq 0
-scheduler_counter_a dq 0
-scheduler_counter_b dq 0
 line_buffer times 128 db 0
 scan_ascii:
     db 0,0,'1','2','3','4','5','6','7','8','9','0','-','=',8,0
