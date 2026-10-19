@@ -454,22 +454,38 @@ poll_keyboard64:
     je .shift_down
     cmp al, 0x36
     je .shift_down
-    movzx eax, al
-    mov al, [scan_ascii + rax]
+    cmp al, 0x3A
+    je .caps_toggle
+    movzx ecx, al
+    mov al, [scan_ascii + rcx]
     test al, al
     jz .none
+    cmp al, 'a'
+    jb .punctuation
+    cmp al, 'z'
+    ja .punctuation
+    mov cl, [shift_pressed]
+    xor cl, [caps_lock]
+    test cl, cl
+    jz .return_key
+    sub al, 32
+    jmp .return_key
+.punctuation:
     cmp byte [shift_pressed], 0
     je .return_key
-    cmp al, 'a'
-    jb .return_key
-    cmp al, 'z'
-    ja .return_key
-    sub al, 32
+    mov al, [scan_shifted + rcx]
+    test al, al
+    jz .none
 .return_key:
     pop rdx
     ret
 .shift_down:
     mov byte [shift_pressed], 1
+    xor eax, eax
+    pop rdx
+    ret
+.caps_toggle:
+    xor byte [caps_lock], 1
     xor eax, eax
     pop rdx
     ret
@@ -746,6 +762,7 @@ message_reboot_failed db 'Reboot controller timed out; system halted safely.', 0
 line_length dd 0
 screen_cursor dd 0
 shift_pressed db 0
+caps_lock db 0
 line_buffer times 128 db 0
 scan_ascii:
     db 0,0,'1','2','3','4','5','6','7','8','9','0','-','=',8,0
