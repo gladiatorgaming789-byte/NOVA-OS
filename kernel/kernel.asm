@@ -1035,7 +1035,7 @@ kmalloc64:
     push r14
     test rdi, rdi
     jz .fail
-    cmp rdi, 0x7FFFFFFFFFFFFFEF
+    cmp rdi, 0x7FFFFFFF
     ja .fail
     add rdi, 15
     and rdi, -16
