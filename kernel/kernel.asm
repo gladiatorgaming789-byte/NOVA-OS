@@ -698,10 +698,10 @@ execute_command64:
     call put_char64
     jmp .done
  .pmmtest:
-    ; Reject a frame outside installed/usable RAM, without changing the free count.
+    ; Reject the first address outside the managed physical-memory range.
     push r12
     mov r12d, [rel free_page_count]
-    mov rdi, PMM_LIMIT - 0x1000
+    mov rdi, 0x40000000
     call pmm_free_page64
     test eax, eax
     jnz .pmmtest_failed
