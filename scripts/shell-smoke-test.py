@@ -69,7 +69,7 @@ def main() -> int:
                 time.sleep(0.15)
 
             deadline = time.monotonic() + 5
-            expected = b"Commands: help, about, clear, memory, uptime, reboot"
+            expected = b"Commands: help, about, clear, memory, alloc, free, uptime, reboot"
             while time.monotonic() < deadline:
                 if serial_path.exists() and expected in serial_path.read_bytes():
                     break
@@ -94,10 +94,31 @@ def main() -> int:
                     return 0
                 time.sleep(0.1)
 
+            # Exercise allocation/freeing through the public shell interface.
+            for key in ("a", "l", "l", "o", "c", "ret"):
+                monitor.sendall(f"sendkey {key}\\n".encode("ascii"))
+                time.sleep(0.12)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if serial_path.exists() and b"Allocated physical page: 0x" in serial_path.read_bytes():
+                    break
+                time.sleep(0.1)
+            else:
+                output = serial_path.read_text(errors="replace") if serial_path.exists() else ""
+                raise RuntimeError("page allocation command failed. Captured serial output:\\n" + output)
+
+            for key in ("f", "r", "e", "e", "ret"):
+                monitor.sendall(f"sendkey {key}\\n".encode("ascii"))
+                time.sleep(0.12)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if serial_path.exists() and b"Freed test page." in serial_path.read_bytes():
+                    print("Shell smoke test passed: help, E820 map, and physical page alloc/free.")
+                    return 0
+                time.sleep(0.1)
+
             output = serial_path.read_text(errors="replace") if serial_path.exists() else ""
-            raise RuntimeError(
-                "shell did not report a non-empty E820 memory map. Captured serial output:\n" + output
-            )
+            raise RuntimeError("page free command failed. Captured serial output:\\n" + output)
         finally:
             if monitor is not None:
                 monitor.close()
