@@ -1301,12 +1301,16 @@ scheduler_build_frame64:
     ret
 
 scheduler_worker_a64:
+    mov al, 'A'
+    call serial_putc64
 .loop:
     inc qword [rel scheduler_counter_a]
     pause
     jmp .loop
 
 scheduler_worker_b64:
+    mov al, 'B'
+    call serial_putc64
 .loop:
     inc qword [rel scheduler_counter_b]
     pause
