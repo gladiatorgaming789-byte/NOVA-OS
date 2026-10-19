@@ -29,13 +29,13 @@ Install NASM, then run:
 
     bash scripts/build.sh
 
-The output is build/nova-os.img.
+The outputs are `build/nova-os.img` (raw floppy image) and `build/nova-os.iso` (BIOS-bootable ISO). The build requires both NASM and `xorriso`.
 
 ## VirtualBox setup
 
 1. Create a VM using a 64-bit x86 guest type if available.
 2. Keep Enable EFI disabled; this prototype uses legacy BIOS.
-3. Attach build/nova-os.img as a floppy image. If your VirtualBox version will not attach it as a floppy, use QEMU or convert it to a compatible virtual floppy format.
+3. Attach `build/nova-os.iso` to the VM's **Optical Drive** under Storage, then start the VM. Leave EFI disabled; this ISO uses legacy BIOS El Torito floppy emulation. Alternatively, attach `build/nova-os.img` as a floppy.
 4. In VirtualBox, enable **Serial Ports** for the VM, select **Port 1**, set **Port Number** to `0x3F8` and **IRQ** to `4`, and choose **Raw File** with a path such as `C:\\nova-serial.log`. Enable the port and start the VM. The file should contain the kernel checkpoints (`E`, `G`, `C`, `J`, `P`, and, if 64-bit entry succeeds, `L`).
 5. Note the last visible marker. A successful NASM build is not proof of a successful boot.
 
