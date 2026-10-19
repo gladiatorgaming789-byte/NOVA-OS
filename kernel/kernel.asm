@@ -473,7 +473,7 @@ print_prompt64:
     call print_string64
     ret
 
-; Non-blocking PS/2 set-1 scancode polling; no IRQ/IDT is required yet.
+; Non-blocking PS/2 set-1 scancode polling; no IRQ handler is needed yet.
 ; Returns ASCII in AL or zero when no printable key was pressed.
 poll_keyboard64:
     push rdx
