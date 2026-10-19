@@ -11,11 +11,11 @@ This file records findings before the kernel grows. Re-run the build and QEMU te
 
 ## Known limitations / follow-up
 
-- **No IDT or exception handlers yet.** A CPU exception can still triple-fault/reset without a useful diagnostic. Add a minimal IDT and exception reporting before introducing more complex kernel services.
-- **Polling keyboard driver only.** It assumes a PS/2-compatible keyboard and set-1 scancodes; there is no IRQ-based input, key repeat policy, caps lock, or shifted punctuation.
+- **Minimal IDT and CPU exception reporting added.** Vectors 0–31 now have gates and report the exception vector over serial before halting. CI builds a fault-injection kernel with `int3` and checks that vector 0x03 is reported. There is not yet a dedicated IST stack for double faults, and hardware IRQs remain disabled.
+- **Polling keyboard driver only.** It assumes a PS/2-compatible keyboard and set-1 scancodes. Shifted punctuation and Caps Lock are now handled, but there is no IRQ-based input or deliberate key-repeat policy.
 - **Reboot controller timeout (fixed).** The 8042 input-buffer wait is now bounded; if the controller never becomes ready, the kernel prints a diagnostic and halts instead of spinning forever.
-- **Early boot assumes BIOS floppy emulation.** The boot sector reads fixed CHS sectors 2–17 and does not retry or fall back to LBA. Keep the ISO's El Torito floppy-emulation layout in sync with this assumption.
-- **Memory layout is hard-coded.** The kernel uses fixed addresses for the stack, page tables, and VGA text memory. A memory map and allocator are not implemented.
+- **Early boot still assumes BIOS floppy emulation.** Reads of sectors 2–17 now retry three times with a BIOS disk reset between failures, but there is no LBA fallback. Keep the ISO's El Torito floppy-emulation layout in sync with this assumption.
+- **Memory layout is explicit but still fixed.** Constants now centralize stack, page-table, and VGA addresses; the stack top is separated from the page-table region. Real-mode code collects up to 32 BIOS E820 entries at physical 0x5000, and `memory` reports the entry count. A physical-frame allocator and heap are not implemented yet.
 - **Serial diagnostics are part of the test contract.** Keep the boot marker sequence and kernel banner stable or update the CI checks together with intentional changes.
 
 ## Verification policy
