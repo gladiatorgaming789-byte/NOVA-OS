@@ -98,6 +98,8 @@ jobs:
             exit 1
           fi
           echo "ISO boot test passed: kernel reached long mode and printed its banner."
+      - name: Smoke-test interactive shell through QEMU keyboard
+        run: python3 scripts/shell-smoke-test.py build/nova-os.img
       - name: Upload bootable ISO, floppy image, and logs
         uses: actions/upload-artifact@v4
         with:
