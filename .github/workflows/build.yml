@@ -67,7 +67,11 @@ jobs:
             echo "Boot test failed: expected kernel checkpoints EGCJPL in order."
             exit 1
           fi
-          echo "Boot test passed: kernel reached 64-bit long mode (L)."
+          if ! grep -q "NOVA OS - 64-bit kernel online" build/serial.log; then
+            echo "Boot test failed: interactive kernel banner was not printed."
+            exit 1
+          fi
+          echo "Boot test passed: kernel reached 64-bit long mode and printed its banner."
       - name: Boot-test ISO in QEMU
         shell: bash
         run: |
@@ -89,7 +93,11 @@ jobs:
             echo "ISO boot test failed: expected checkpoints EGCJPL."
             exit 1
           fi
-          echo "ISO boot test passed: kernel reached 64-bit long mode (L)."
+          if ! grep -q "NOVA OS - 64-bit kernel online" build/iso-serial.log; then
+            echo "ISO boot test failed: interactive kernel banner was not printed."
+            exit 1
+          fi
+          echo "ISO boot test passed: kernel reached long mode and printed its banner."
       - name: Upload bootable ISO, floppy image, and logs
         uses: actions/upload-artifact@v4
         with:
