@@ -252,6 +252,9 @@ long_mode_entry:
 
     ; Install exception gates before starting kernel services.
     call init_idt64
+%ifdef NOVA_TEST_EXCEPTION
+    int3                         ; CI-only fault injection validates the IDT.
+%endif
     call screen_clear64
     mov rsi, banner64
     call print_string64
