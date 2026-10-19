@@ -246,11 +246,29 @@ long_mode_entry:
     mov es, ax
     mov ss, ax
     mov rsp, 0x90000
+    cld
+
+    ; Clear the VGA text buffer and show a real kernel status banner.
     mov rdi, 0xB8000
-    mov al, 'L'
+    mov ax, 0x0720
+    mov ecx, 2000
+    rep stosw
+
+    mov rdi, 0xB8000
+    mov rsi, banner64
     mov ah, 0x0A
-    mov [rdi + 14], ax
-    mov al, 'L'
+.print_banner:
+    lodsb
+    test al, al
+    jz .banner_done
+    mov [rdi], ax
+    add rdi, 2
+    call serial_putc64
+    jmp .print_banner
+.banner_done:
+    mov al, 0x0D
+    call serial_putc64
+    mov al, 0x0A
     call serial_putc64
 .halt:
     cli
@@ -265,3 +283,5 @@ BITS 32
 marker_c db 'C', 0
 marker_j db 'J', 0
 marker_p db 'P', 0
+BITS 64
+banner64 db 'NOVA OS - 64-bit kernel online', 0
