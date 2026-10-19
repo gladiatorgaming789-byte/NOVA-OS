@@ -1,0 +1,24 @@
+name: Build NOVA-OS prototype
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install NASM
+        run: sudo apt-get update && sudo apt-get install -y nasm
+      - name: Assemble boot sector and kernel image
+        run: bash scripts/build.sh
+      - name: Upload raw floppy image
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-os-raw-image
+          path: |
+            build/nova-os.img
+            build/SHA256SUMS.txt
