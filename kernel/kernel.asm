@@ -520,10 +520,19 @@ execute_command64:
     mov al, 10
     call put_char64
 .wait_controller:
+    mov ecx, 0xFFFF
+.wait_input_buffer:
     mov dx, 0x64
     in al, dx
     test al, 2
-    jnz .wait_controller
+    jz .send_reset
+    loop .wait_input_buffer
+    mov rsi, message_reboot_failed
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .halt
+.send_reset:
     mov al, 0xFE
     out 0x64, al
     cli
@@ -576,6 +585,7 @@ message_help db 'Commands: help, about, clear, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
 message_reboot db 'Rebooting NOVA OS...', 0
+message_reboot_failed db 'Reboot controller timed out; system halted safely.', 0
 line_length dd 0
 screen_cursor dd 0
 shift_pressed db 0
