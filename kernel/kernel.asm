@@ -1086,7 +1086,7 @@ kmalloc64:
     mov [r13 + 8], rbx
     mov rax, r12
 .mark_used:
-    or rax, HEAP_USED_BIT
+    bts rax, 63
     mov [r13], rax
     lea rax, [r13 + 16]
     jmp .done
