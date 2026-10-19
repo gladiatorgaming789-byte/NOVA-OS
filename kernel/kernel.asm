@@ -582,6 +582,21 @@ execute_command64:
     test al, al
     jnz .free
     mov rsi, line_buffer
+    mov rdi, command_heap
+    call strings_equal64
+    test al, al
+    jnz .heap
+    mov rsi, line_buffer
+    mov rdi, command_halloc
+    call strings_equal64
+    test al, al
+    jnz .halloc
+    mov rsi, line_buffer
+    mov rdi, command_hfree
+    call strings_equal64
+    test al, al
+    jnz .hfree
+    mov rsi, line_buffer
     mov rdi, command_uptime
     call strings_equal64
     test al, al
@@ -673,6 +688,66 @@ execute_command64:
     jmp .done
 .free_failed:
     mov rsi, message_free_failed
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+ .heap:
+    mov rsi, message_heap_status
+    call print_string64
+    mov eax, [rel heap_pages]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    jmp .done
+.halloc:
+    cmp qword [rel test_heap_ptr], 0
+    jne .halloc_already
+    mov edi, 128
+    call kmalloc64
+    test rax, rax
+    jz .halloc_failed
+    mov [rel test_heap_ptr], rax
+    mov rsi, message_heap_allocated
+    call print_string64
+    mov eax, [rel test_heap_ptr]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    jmp .done
+.halloc_already:
+    mov rsi, message_heap_already
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.halloc_failed:
+    mov rsi, message_heap_failed
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.hfree:
+    mov rdi, [rel test_heap_ptr]
+    test rdi, rdi
+    jz .hfree_none
+    call kfree64
+    test eax, eax
+    jz .hfree_failed
+    mov qword [rel test_heap_ptr], 0
+    mov rsi, message_heap_freed
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.hfree_none:
+    mov rsi, message_heap_none
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.hfree_failed:
+    mov rsi, message_heap_free_failed
     call print_string64
     mov al, 10
     call put_char64
@@ -944,6 +1019,148 @@ pmm_free_page64:
     pop rbx
     ret
 
+
+; Simple page-backed kernel heap. Each block has a 16-byte header:
+; [payload size with bit 63 = allocated][next block pointer]. Blocks are
+; kept in a singly linked list; free validates pointers and first-fit reuses
+; freed blocks. Requests are rounded to 16-byte alignment.
+%define HEAP_USED_BIT 0x8000000000000000
+%define HEAP_SIZE_MASK 0x7FFFFFFFFFFFFFFF
+
+kmalloc64:
+    ; RDI = requested bytes, RAX = pointer or zero.
+    push rbx
+    push r12
+    push r13
+    push r14
+    test rdi, rdi
+    jz .fail
+    cmp rdi, 0x7FFFFFFFFFFFFFEF
+    ja .fail
+    add rdi, 15
+    and rdi, -16
+    mov r12, rdi
+    mov r13, [rel heap_head]
+    xor r14d, r14d
+.find:
+    test r13, r13
+    jz .need_page
+    mov rax, [r13]
+    test rax, HEAP_USED_BIT
+    jnz .next
+    and rax, HEAP_SIZE_MASK
+    cmp rax, r12
+    jae .found
+.next:
+    mov r14, r13
+    mov r13, [r13 + 8]
+    jmp .find
+.need_page:
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov qword [rax], 4080
+    mov qword [rax + 8], 0
+    inc dword [rel heap_pages]
+    test r14, r14
+    jnz .append
+    mov [rel heap_head], rax
+    mov r13, rax
+    jmp .find
+.append:
+    mov [r14 + 8], rax
+    mov r13, rax
+    jmp .find
+.found:
+    ; Split if the remainder can hold a header and a minimum payload.
+    mov rdx, rax
+    sub rdx, r12
+    cmp rdx, 32
+    jb .mark_used
+    lea rbx, [r13 + 16]
+    add rbx, r12
+    mov rcx, [r13 + 8]
+    mov [rbx + 8], rcx
+    sub rdx, 16
+    mov [rbx], rdx
+    mov [r13 + 8], rbx
+    mov rax, r12
+.mark_used:
+    or rax, HEAP_USED_BIT
+    mov [r13], rax
+    lea rax, [r13 + 16]
+    jmp .done
+.fail:
+    xor eax, eax
+.done:
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+kfree64:
+    ; RDI = payload pointer; EAX=1 on success, 0 on invalid/double free.
+    push rbx
+    push r12
+    push r13
+    mov r12, rdi
+    xor eax, eax
+    test r12, 15
+    jnz .return
+    cmp r12, 0x100000
+    jb .return
+    mov r13, [rel heap_head]
+.find:
+    test r13, r13
+    jz .return
+    lea rbx, [r13 + 16]
+    cmp rbx, r12
+    je .found
+    mov r13, [r13 + 8]
+    jmp .find
+.found:
+    mov rbx, [r13]
+    test rbx, HEAP_USED_BIT
+    jz .return
+    and rbx, HEAP_SIZE_MASK
+    mov [r13], rbx
+    ; Coalesce adjacent free blocks in list order.
+    mov r13, [rel heap_head]
+.coalesce:
+    test r13, r13
+    jz .success
+    mov rax, [r13]
+    test rax, HEAP_USED_BIT
+    jnz .coalesce_next
+    mov rbx, [r13 + 8]
+    test rbx, rbx
+    jz .coalesce_next
+    mov rcx, [rbx]
+    test rcx, HEAP_USED_BIT
+    jnz .coalesce_next
+    lea rdx, [r13 + 16]
+    add rdx, rax
+    cmp rdx, rbx
+    jne .coalesce_next
+    and rcx, HEAP_SIZE_MASK
+    add rax, 16
+    add rax, rcx
+    mov [r13], rax
+    mov rcx, [rbx + 8]
+    mov [r13 + 8], rcx
+    jmp .coalesce
+.coalesce_next:
+    mov r13, [r13 + 8]
+    jmp .coalesce
+.success:
+    mov eax, 1
+.return:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
 ; Build 32 exception gates and IRQ0/IRQ1 gates at runtime.
 init_idt64:
     lea rdi, [rel idt64]
@@ -1155,8 +1372,11 @@ command_reboot db 'reboot', 0
 command_memory db 'memory', 0
 command_alloc db 'alloc', 0
 command_free db 'free', 0
+command_heap db 'heap', 0
+command_halloc db 'halloc', 0
+command_hfree db 'hfree', 0
 command_uptime db 'uptime', 0
-message_help db 'Commands: help, about, clear, memory, alloc, free, uptime, reboot', 0
+message_help db 'Commands: help, about, clear, memory, alloc, free, heap, halloc, hfree, uptime, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
 message_memory db 'Firmware E820 entries: 0x', 0
@@ -1167,6 +1387,13 @@ message_alloc_failed db 'No free physical page is available.', 0
 message_freed db 'Freed test page.', 0
 message_free_none db 'No test page is currently allocated.', 0
 message_free_failed db 'Could not free the test page.', 0
+message_heap_status db 'Heap pages allocated: 0x', 0
+message_heap_allocated db 'Heap allocation at: 0x', 0
+message_heap_already db 'A heap test allocation already exists; use hfree first.', 0
+message_heap_failed db 'Kernel heap allocation failed.', 0
+message_heap_freed db 'Heap test allocation freed.', 0
+message_heap_none db 'No heap test allocation is active.', 0
+message_heap_free_failed db 'Heap free rejected the pointer.', 0
 message_uptime db 'PIT timer ticks: 0x', 0
 message_reboot db 'Rebooting NOVA OS...', 0
 message_reboot_failed db 'Reboot controller timed out; system halted safely.', 0
@@ -1181,6 +1408,9 @@ align 4
 timer_ticks dd 0
 free_page_count dd 0
 test_alloc_page dq 0
+heap_head dq 0
+heap_pages dd 0
+test_heap_ptr dq 0
 line_buffer times 128 db 0
 scan_ascii:
     db 0,0,'1','2','3','4','5','6','7','8','9','0','-','=',8,0
