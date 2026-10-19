@@ -8,6 +8,7 @@ kernel_entry:
     mov es, ax
     mov ss, ax
     mov sp, 0x7000
+    call serial_init
     mov si, marker_e
     call print16
 
@@ -25,6 +26,59 @@ kernel_entry:
     mov cr0, eax
     jmp CODE32_SEL:protected_mode_entry
 
+; Initialize COM1 at 38400 baud, 8-N-1.
+serial_init:
+    push ax
+    push dx
+    mov dx, 0x3F9
+    xor al, al
+    out dx, al
+    mov dx, 0x3FB
+    mov al, 0x80
+    out dx, al
+    mov dx, 0x3F8
+    mov al, 3
+    out dx, al
+    mov dx, 0x3F9
+    xor al, al
+    out dx, al
+    mov dx, 0x3FB
+    mov al, 3
+    out dx, al
+    mov dx, 0x3FA
+    mov al, 0xC7
+    out dx, al
+    mov dx, 0x3FC
+    mov al, 0x0B
+    out dx, al
+    pop dx
+    pop ax
+    ret
+
+; Write AL to COM1 with a bounded wait so a missing UART cannot hang boot.
+serial_putc:
+    push ax
+    push cx
+    push dx
+    mov ah, al
+    mov dx, 0x3FD
+    mov cx, 0xFFFF
+.wait:
+    in al, dx
+    test al, 0x20
+    jnz .ready
+    loop .wait
+    jmp .done
+.ready:
+    mov dx, 0x3F8
+    mov al, ah
+    out dx, al
+.done:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
 print16:
     lodsb
     test al, al
@@ -32,6 +86,10 @@ print16:
     mov ah, 0x0E
     mov bx, 0x0007
     int 0x10
+    ; Mirror every early marker to COM1 for a persistent log.
+    push ax
+    call serial_putc
+    pop ax
     jmp print16
 .done:
     ret
@@ -124,6 +182,9 @@ print32:
     mov ebx, 0x000B8000
     mov edx, [vga_cursor]
     mov [ebx + edx], ax
+    push eax
+    call serial_putc
+    pop eax
     add edx, 2
     mov [vga_cursor], edx
     ret
@@ -141,6 +202,8 @@ long_mode_entry:
     mov al, 'L'
     mov ah, 0x0A
     mov [rdi + 14], ax
+    mov al, 'L'
+    call serial_putc
 .halt:
     cli
     hlt
