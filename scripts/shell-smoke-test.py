@@ -2,7 +2,6 @@
 """Smoke-test NOVA-OS keyboard input and shell commands through QEMU's monitor."""
 from __future__ import annotations
 
-import os
 import socket
 import subprocess
 import sys
