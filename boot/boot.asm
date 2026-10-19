@@ -17,6 +17,7 @@ start:
     sti
     cld
     mov [boot_drive], dl
+    call serial_init16
     mov si, marker_b
     call print_string
 
@@ -114,10 +115,64 @@ disk_error:
     hlt
     jmp .hang
 
+serial_init16:
+    push ax
+    push dx
+    mov dx, 0x3F9
+    xor al, al
+    out dx, al
+    mov dx, 0x3FB
+    mov al, 0x80
+    out dx, al
+    mov dx, 0x3F8
+    mov al, 3
+    out dx, al
+    mov dx, 0x3F9
+    xor al, al
+    out dx, al
+    mov dx, 0x3FB
+    mov al, 3
+    out dx, al
+    mov dx, 0x3FA
+    mov al, 0xC7
+    out dx, al
+    mov dx, 0x3FC
+    mov al, 0x0B
+    out dx, al
+    pop dx
+    pop ax
+    ret
+
+serial_putc16:
+    push ax
+    push cx
+    push dx
+    mov ah, al
+    mov dx, 0x3FD
+    mov cx, 0xFFFF
+.wait:
+    in al, dx
+    test al, 0x20
+    jnz .ready
+    loop .wait
+    jmp .done
+.ready:
+    mov dx, 0x3F8
+    mov al, ah
+    out dx, al
+.done:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
 print_string:
     lodsb
     test al, al
     jz .done
+    push ax
+    call serial_putc16
+    pop ax
     mov ah, 0x0E
     mov bx, 0x0007
     int 0x10
