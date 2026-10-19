@@ -69,7 +69,7 @@ def main() -> int:
                 time.sleep(0.15)
 
             deadline = time.monotonic() + 5
-            expected = b"Commands: help, about, clear, reboot"
+            expected = b"Commands: help, about, clear, memory, reboot"
             while time.monotonic() < deadline:
                 if serial_path.exists() and expected in serial_path.read_bytes():
                     break
