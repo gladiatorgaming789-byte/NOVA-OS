@@ -72,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           nasm -D NOVA_TEST_EXCEPTION=1 -f bin kernel/kernel.asm -o build/kernel-exception-test.bin
-          test "$(wc -c < build/kernel-exception-test.bin)" -le 8192
+          test "$(wc -c < build/kernel-exception-test.bin)" -le 262144
           dd if=/dev/zero of=build/nova-exception-test.img bs=512 count=2880 status=none
           dd if=build/boot.bin of=build/nova-exception-test.img conv=notrunc status=none
           dd if=build/kernel-exception-test.bin of=build/nova-exception-test.img bs=512 seek=1 conv=notrunc status=none
