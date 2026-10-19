@@ -105,7 +105,7 @@ print16:
 
 
 ; Collect the BIOS E820 memory map into physical 0x5000 (up to 32 entries).
-; Each entry is 24 bytes. This is discovery only; no allocator uses it yet.
+; Each entry is 24 bytes. The physical allocator consumes this map in long mode.
 collect_e820:
     pushad
     push es
@@ -853,6 +853,7 @@ strings_equal64:
 ; Bitmap bit 1 = reserved/allocated; bit 0 = available. Keep low 1 MiB
 ; reserved for firmware data, the loaded kernel, stack, and page tables.
 %define PMM_BITMAP       0x60000
+%define PMM_USABLE_BITMAP 0x68000
 %define PMM_BITMAP_SIZE  32768
 %define PMM_PAGE_COUNT   262144
 %define PMM_FIRST_PAGE   256
@@ -867,9 +868,15 @@ pmm_init64:
     push r9
     push r10
     push r11
+    ; Allocation bitmap starts fully reserved; usable bitmap starts empty.
+    ; The second bitmap prevents free() from releasing firmware-reserved pages.
     mov edi, PMM_BITMAP
     mov ecx, PMM_BITMAP_SIZE
     mov al, 0xFF
+    rep stosb
+    mov edi, PMM_USABLE_BITMAP
+    xor eax, eax
+    mov ecx, PMM_BITMAP_SIZE
     rep stosb
     mov edi, PMM_BITMAP
     mov dword [rel free_page_count], 0
@@ -921,6 +928,16 @@ pmm_init64:
     not r11b
     and al, r11b
     mov [rdi + r10], al
+    ; Mark this frame as eligible for allocation/free, separately from
+    ; the allocation state. A reserved frame must never become freeable.
+    mov rax, PMM_USABLE_BITMAP
+    mov r10d, r8d
+    shr r10d, 3
+    mov ecx, r8d
+    and ecx, 7
+    mov r11d, 1
+    shl r11d, cl
+    or byte [rax + r10], r11b
     inc dword [rel free_page_count]
 .already_free:
     inc r8d
@@ -994,7 +1011,6 @@ pmm_free_page64:
     jb .return
     cmp rdi, PMM_LIMIT
     jae .return
-    mov r8d, PMM_BITMAP
     mov r9d, edi
     shr r9d, 12
     mov r10d, r9d
@@ -1003,6 +1019,12 @@ pmm_free_page64:
     and ecx, 7
     mov r11d, 1
     shl r11d, cl
+    ; Reject frames absent from the E820 usable-memory set. The allocation
+    ; bitmap alone cannot distinguish reserved frames from allocated frames.
+    mov r8d, PMM_USABLE_BITMAP
+    test byte [r8 + r10], r11b
+    jz .return
+    mov r8d, PMM_BITMAP
     mov al, [r8 + r10]
     test al, r11b
     jz .return
