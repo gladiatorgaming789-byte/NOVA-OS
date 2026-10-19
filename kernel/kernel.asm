@@ -248,6 +248,10 @@ long_mode_entry:
     mov rsp, 0x90000
     cld
 
+    ; Preserve the L serial checkpoint so CI can prove long-mode entry.
+    mov al, 'L'
+    call serial_putc64
+
     ; Clear the VGA text buffer and show a real kernel status banner.
     mov rdi, 0xB8000
     mov ax, 0x0720
