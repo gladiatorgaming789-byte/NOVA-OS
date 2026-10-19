@@ -72,13 +72,31 @@ def main() -> int:
             expected = b"Commands: help, about, clear, reboot"
             while time.monotonic() < deadline:
                 if serial_path.exists() and expected in serial_path.read_bytes():
-                    print("Shell smoke test passed: typed 'help' and received command list.")
+                    break
+                time.sleep(0.1)
+            else:
+                output = serial_path.read_text(errors="replace") if serial_path.exists() else ""
+                raise RuntimeError(
+                    "shell did not respond to typed 'help'. Captured serial output:\n" + output
+                )
+
+            # Verify BIOS E820 discovery through the shell as well.
+            for key in ("m", "e", "m", "o", "r", "y", "ret"):
+                monitor.sendall(f"sendkey {key}\n".encode("ascii"))
+                time.sleep(0.15)
+
+            import re
+            deadline = time.monotonic() + 5
+            pattern = re.compile(rb"Firmware E820 entries: 0x(?!0000)[0-9A-F]{4}")
+            while time.monotonic() < deadline:
+                if serial_path.exists() and pattern.search(serial_path.read_bytes()):
+                    print("Shell smoke test passed: help and non-empty E820 memory map.")
                     return 0
                 time.sleep(0.1)
 
             output = serial_path.read_text(errors="replace") if serial_path.exists() else ""
             raise RuntimeError(
-                "shell did not respond to typed 'help'. Captured serial output:\n" + output
+                "shell did not report a non-empty E820 memory map. Captured serial output:\n" + output
             )
         finally:
             if monitor is not None:
