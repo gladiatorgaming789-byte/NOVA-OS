@@ -5,7 +5,7 @@ This file records findings before the kernel grows. Re-run the build and QEMU te
 ## Fixed
 
 - **Kernel string output stopped after one character (fixed).** The 32-bit `print32` routine returned after each character instead of looping until NUL. This made VGA diagnostics misleading. It now jumps back to the routine for the next character.
-- **Boot tests did not exercise the command shell (fixed in CI).** The previous QEMU checks proved only that long mode and the banner were reached. `scripts/shell-smoke-test.py` now sends `help` through QEMU's emulated keyboard and requires the command list to appear on serial output.
+- **Boot tests did not exercise the command shell (fixed in CI).** `scripts/shell-smoke-test.py` sends `help` and `memory` through QEMU's emulated keyboard, checks the command list, and requires a non-empty E820 memory-map count.
 - **Banner regression could pass boot checks (fixed in CI).** Rebuilt floppy and ISO tests now require the serial banner as well as the boot checkpoints.
 - **A stale root ISO could block a valid source build (fixed in CI).** The workflow no longer tests an old committed root-level ISO before rebuilding; it tests and publishes only the freshly generated image from the current source.
 
