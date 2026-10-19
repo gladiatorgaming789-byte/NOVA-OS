@@ -456,8 +456,8 @@ poll_keyboard64:
     je .shift_down
     cmp al, 0x3A
     je .caps_toggle
-    movzx ecx, al
-    mov al, [scan_ascii + rcx]
+    movzx r8d, al
+    mov al, [scan_ascii + r8]
     test al, al
     jz .none
     cmp al, 'a'
@@ -473,7 +473,7 @@ poll_keyboard64:
 .punctuation:
     cmp byte [shift_pressed], 0
     je .return_key
-    mov al, [scan_shifted + rcx]
+    mov al, [scan_shifted + r8]
     test al, al
     jz .none
 .return_key:
