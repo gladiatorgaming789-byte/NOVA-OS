@@ -297,12 +297,15 @@ long_mode_entry:
     mov al, 'L'
     call serial_putc64
 
-    ; Install exception gates before starting kernel services.
+    ; Install exception and hardware IRQ gates before enabling interrupts.
     call init_idt64
+    call pic_init64
+    call pit_init64
 %ifdef NOVA_TEST_EXCEPTION
     int3                         ; CI-only fault injection validates the IDT.
 %endif
     call screen_clear64
+    sti
     mov rsi, banner64
     call print_string64
     mov al, 10
@@ -473,16 +476,18 @@ print_prompt64:
     call print_string64
     ret
 
-; Non-blocking PS/2 set-1 scancode polling; no IRQ handler is needed yet.
-; Returns ASCII in AL or zero when no printable key was pressed.
+; Consume a scancode queued by IRQ1, then translate set-1 to ASCII.
+; Returns ASCII in AL or zero when the queue is empty/non-printable.
 poll_keyboard64:
     push rdx
-    mov dx, 0x64
-    in al, dx
-    test al, 1
-    jz .none
-    mov dx, 0x60
-    in al, dx
+    push r8
+    mov al, [key_queue_tail]
+    cmp al, [key_queue_head]
+    je .none
+    movzx edx, al
+    mov al, [key_queue + rdx]
+    inc byte [key_queue_tail]
+    and byte [key_queue_tail], 63
     cmp al, 0xAA
     je .shift_up
     cmp al, 0xB6
@@ -516,22 +521,26 @@ poll_keyboard64:
     test al, al
     jz .none
 .return_key:
+    pop r8
     pop rdx
     ret
 .shift_down:
     mov byte [shift_pressed], 1
     xor eax, eax
+    pop r8
     pop rdx
     ret
 .caps_toggle:
     xor byte [caps_lock], 1
     xor eax, eax
+    pop r8
     pop rdx
     ret
 .shift_up:
     mov byte [shift_pressed], 0
 .none:
     xor eax, eax
+    pop r8
     pop rdx
     ret
 
@@ -561,6 +570,11 @@ execute_command64:
     call strings_equal64
     test al, al
     jnz .memory
+    mov rsi, line_buffer
+    mov rdi, command_uptime
+    call strings_equal64
+    test al, al
+    jnz .uptime
     cmp byte [line_buffer], 0
     je .done
     mov rsi, message_unknown
@@ -595,6 +609,14 @@ execute_command64:
     mov al, 10
     call put_char64
     jmp .done
+.uptime:
+    mov rsi, message_uptime
+    call print_string64
+    mov eax, [timer_ticks]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    jmp .done
 .reboot:
     mov rsi, message_reboot
     call print_string64
@@ -621,6 +643,24 @@ execute_command64:
     hlt
     jmp .halt
 .done:
+    ret
+
+; Print EAX as eight hexadecimal digits.
+print_hex32:
+    push rbx
+    push rcx
+    mov ebx, eax
+    mov ecx, 8
+.hex_digit32:
+    mov eax, ebx
+    shr eax, 28
+    and eax, 0x0F
+    mov al, [hex_digits64 + rax]
+    call put_char64
+    shl ebx, 4
+    loop .hex_digit32
+    pop rcx
+    pop rbx
     ret
 
 ; AL=1 when the zero-terminated strings match; otherwise AL=0.
@@ -666,13 +706,11 @@ strings_equal64:
 
 
 
-; Build the 32 exception gates at runtime. NASM cannot split a relocatable
-; handler address into high/low pieces in a flat binary with '&' and shifts.
-; Hardware IRQs remain disabled until an interrupt controller is implemented.
+; Build 32 exception gates and IRQ0/IRQ1 gates at runtime.
 init_idt64:
     lea rdi, [rel idt64]
     lea rsi, [rel isr_table64]
-    mov ecx, 32
+    mov ecx, 34
 .next_gate:
     mov rax, [rsi]
     mov [rdi], ax                 ; offset bits 0..15
@@ -689,6 +727,69 @@ init_idt64:
     loop .next_gate
     lidt [rel idtr64]
     ret
+
+; Remap 8259 PIC vectors to 0x20..0x2F, then unmask only timer and keyboard.
+pic_init64:
+    mov al, 0x11
+    out 0x20, al
+    out 0xA0, al
+    mov al, 0x20
+    out 0x21, al
+    mov al, 0x28
+    out 0xA1, al
+    mov al, 0x04
+    out 0x21, al
+    mov al, 0x02
+    out 0xA1, al
+    mov al, 0x01
+    out 0x21, al
+    out 0xA1, al
+    mov al, 0xFC                 ; IRQ0 timer + IRQ1 keyboard enabled
+    out 0x21, al
+    mov al, 0xFF                 ; mask all slave IRQs
+    out 0xA1, al
+    ret
+
+; Program PIT channel 0 to approximately 100 Hz (11932 Hz divisor).
+pit_init64:
+    mov al, 0x36
+    out 0x43, al
+    mov ax, 11932
+    out 0x40, al
+    mov al, ah
+    out 0x40, al
+    ret
+
+; IRQ0 increments a 32-bit tick counter; IRQ1 queues the keyboard scancode.
+; Preserve every general register that the interrupted kernel may be using.
+irq0_handler64:
+    push rax
+    inc dword [rel timer_ticks]
+    mov al, 0x20
+    out 0x20, al
+    pop rax
+    iretq
+
+irq1_handler64:
+    push rax
+    push rbx
+    mov dx, 0x60
+    in al, dx
+    mov bl, [rel key_queue_head]
+    mov ah, bl
+    inc ah
+    and ah, 63
+    cmp ah, [rel key_queue_tail]
+    je .queue_full
+    movzx ebx, bl
+    mov [rel key_queue + rbx], al
+    mov [rel key_queue_head], ah
+.queue_full:
+    mov al, 0x20
+    out 0x20, al
+    pop rbx
+    pop rax
+    iretq
 
 exception_common64:
     ; Stubs normalize the stack to [vector, error code, saved RIP, ...].
@@ -779,10 +880,11 @@ isr_table64:
     dq isr8, isr9, isr10, isr11, isr12, isr13, isr14, isr15
     dq isr16, isr17, isr18, isr19, isr20, isr21, isr22, isr23
     dq isr24, isr25, isr26, isr27, isr28, isr29, isr30, isr31
+    dq irq0_handler64, irq1_handler64
 
 align 16
 idt64:
-    times 32 * 16 db 0
+    times 34 * 16 db 0
 idt64_end:
 
 idtr64:
@@ -810,16 +912,23 @@ command_about db 'about', 0
 command_clear db 'clear', 0
 command_reboot db 'reboot', 0
 command_memory db 'memory', 0
-message_help db 'Commands: help, about, clear, memory, reboot', 0
+command_uptime db 'uptime', 0
+message_help db 'Commands: help, about, clear, memory, uptime, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
 message_memory db 'Firmware E820 entries: 0x', 0
+message_uptime db 'PIT timer ticks: 0x', 0
 message_reboot db 'Rebooting NOVA OS...', 0
 message_reboot_failed db 'Reboot controller timed out; system halted safely.', 0
 line_length dd 0
 screen_cursor dd 0
 shift_pressed db 0
 caps_lock db 0
+key_queue_head db 0
+key_queue_tail db 0
+key_queue times 64 db 0
+align 4
+timer_ticks dd 0
 line_buffer times 128 db 0
 scan_ascii:
     db 0,0,'1','2','3','4','5','6','7','8','9','0','-','=',8,0
