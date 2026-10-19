@@ -250,6 +250,8 @@ long_mode_entry:
     mov al, 'L'
     call serial_putc64
 
+    ; Install exception gates before starting kernel services.
+    call init_idt64
     call screen_clear64
     mov rsi, banner64
     call print_string64
@@ -565,6 +567,150 @@ strings_equal64:
     pop rdi
     pop rsi
     ret
+
+
+
+; Install gates for the 32 architecturally defined CPU exception vectors.
+; Hardware IRQs remain disabled until an interrupt controller is implemented.
+init_idt64:
+    lidt [rel idtr64]
+    ret
+
+exception_common64:
+    ; Stubs normalize the stack to [vector, error code, saved RIP, ...].
+    mov ebx, [rsp]
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbx
+
+    mov rsi, exception_prefix64
+.print_prefix:
+    lodsb
+    test al, al
+    jz .print_vector
+    call serial_putc64
+    jmp .print_prefix
+
+.print_vector:
+    mov eax, ebx
+    shr eax, 4
+    and eax, 0x0F
+    mov al, [hex_digits64 + rax]
+    call serial_putc64
+    mov eax, ebx
+    and eax, 0x0F
+    mov al, [hex_digits64 + rax]
+    call serial_putc64
+    mov al, 13
+    call serial_putc64
+    mov al, 10
+    call serial_putc64
+.halt:
+    cli
+    hlt
+    jmp .halt
+
+%macro ISR_NOERR 1
+isr%1:
+    push qword 0
+    push qword %1
+    jmp exception_common64
+%endmacro
+
+%macro ISR_ERR 1
+isr%1:
+    push qword %1
+    jmp exception_common64
+%endmacro
+
+ISR_NOERR 0
+ISR_NOERR 1
+ISR_NOERR 2
+ISR_NOERR 3
+ISR_NOERR 4
+ISR_NOERR 5
+ISR_NOERR 6
+ISR_NOERR 7
+ISR_ERR   8
+ISR_NOERR 9
+ISR_ERR   10
+ISR_ERR   11
+ISR_ERR   12
+ISR_ERR   13
+ISR_ERR   14
+ISR_NOERR 15
+ISR_NOERR 16
+ISR_ERR   17
+ISR_NOERR 18
+ISR_NOERR 19
+ISR_NOERR 20
+ISR_ERR   21
+ISR_NOERR 22
+ISR_NOERR 23
+ISR_NOERR 24
+ISR_NOERR 25
+ISR_NOERR 26
+ISR_NOERR 27
+ISR_NOERR 28
+ISR_ERR   29
+ISR_ERR   30
+ISR_NOERR 31
+
+%macro IDT_GATE 1
+    dw %1 & 0xFFFF
+    dw CODE64_SEL
+    db 0
+    db 0x8E
+    dw (%1 >> 16) & 0xFFFF
+    dd (%1 >> 32) & 0xFFFFFFFF
+    dd 0
+%endmacro
+
+align 16
+idt64:
+    IDT_GATE isr0
+    IDT_GATE isr1
+    IDT_GATE isr2
+    IDT_GATE isr3
+    IDT_GATE isr4
+    IDT_GATE isr5
+    IDT_GATE isr6
+    IDT_GATE isr7
+    IDT_GATE isr8
+    IDT_GATE isr9
+    IDT_GATE isr10
+    IDT_GATE isr11
+    IDT_GATE isr12
+    IDT_GATE isr13
+    IDT_GATE isr14
+    IDT_GATE isr15
+    IDT_GATE isr16
+    IDT_GATE isr17
+    IDT_GATE isr18
+    IDT_GATE isr19
+    IDT_GATE isr20
+    IDT_GATE isr21
+    IDT_GATE isr22
+    IDT_GATE isr23
+    IDT_GATE isr24
+    IDT_GATE isr25
+    IDT_GATE isr26
+    IDT_GATE isr27
+    IDT_GATE isr28
+    IDT_GATE isr29
+    IDT_GATE isr30
+    IDT_GATE isr31
+idt64_end:
+
+idtr64:
+    dw idt64_end - idt64 - 1
+    dq idt64
+
+exception_prefix64 db 'NOVA exception vector 0x', 0
+hex_digits64 db '0123456789ABCDEF'
 
 BITS 16
 vga_cursor dd 8
