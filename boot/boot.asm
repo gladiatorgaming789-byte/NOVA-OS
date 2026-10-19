@@ -4,8 +4,6 @@ ORG 0x7C00
 KERNEL_SEG equ 0x0000
 KERNEL_OFF equ 0x1000
 KERNEL_SECTORS equ 512           ; 256 KiB maximum kernel image
-KERNEL_COUNT_SIGNATURE db 'NOVA_KSEC'
-kernel_sector_limit dw KERNEL_SECTORS
 SECTORS_PER_TRACK equ 18
 HEADS_PER_CYLINDER equ 2
 
@@ -127,6 +125,8 @@ print_string:
 .done:
     ret
 
+kernel_count_signature db 'NOVA_KSEC'
+kernel_sector_limit dw KERNEL_SECTORS
 boot_drive db 0
 disk_retries db 0
 current_sector db 2
