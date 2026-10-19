@@ -11,14 +11,37 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
-      - name: Install NASM
-        run: sudo apt-get update && sudo apt-get install -y nasm
+      - name: Install NASM and QEMU
+        run: sudo apt-get update && sudo apt-get install -y nasm qemu-system-x86
       - name: Assemble boot sector and kernel image
         run: bash scripts/build.sh
-      - name: Upload raw floppy image
+      - name: Boot-test in QEMU
+        shell: bash
+        run: |
+          set +e
+          timeout 8s qemu-system-x86_64 \
+            -machine pc -m 128M \
+            -drive file=build/nova-os.img,format=raw,if=floppy \
+            -boot a -display none -serial file:build/serial.log \
+            -no-reboot -no-shutdown
+          status=$?
+          set -e
+          if [[ "$status" -ne 124 && "$status" -ne 0 ]]; then
+            echo "QEMU exited unexpectedly with status $status"
+            exit "$status"
+          fi
+          echo "COM1 checkpoint log:"
+          cat build/serial.log || true
+          if ! grep -q "EGCJPL" build/serial.log; then
+            echo "Boot test failed: expected kernel checkpoints EGCJPL in order."
+            exit 1
+          fi
+          echo "Boot test passed: kernel reached 64-bit long mode (L)."
+      - name: Upload bootable floppy image and serial log
         uses: actions/upload-artifact@v4
         with:
-          name: nova-os-raw-image
+          name: nova-os-boot-tested-image
           path: |
             build/nova-os.img
             build/SHA256SUMS.txt
+            build/serial.log
