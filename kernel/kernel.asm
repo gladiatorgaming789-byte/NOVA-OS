@@ -140,14 +140,14 @@ long_mode_entry:
     mov rdi, 0xB8000
     mov al, 'L'
     mov ah, 0x0A
-    mov [rdi + 10], ax
+    mov [rdi + 14], ax
 .halt:
     cli
     hlt
     jmp .halt
 
 BITS 16
-vga_cursor dd 2
+vga_cursor dd 8
 marker_e db 'E', 0
 marker_g db 'G', 0
 BITS 32
