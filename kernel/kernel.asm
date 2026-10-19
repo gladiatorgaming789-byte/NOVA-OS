@@ -1262,11 +1262,11 @@ kfree64:
 scheduler_init64:
     mov qword [rel task_rsp], 0
     mov rdi, TASK1_STACK_TOP
-    lea rsi, [rel scheduler_worker_a64]
+    mov rsi, scheduler_worker_a64
     call scheduler_build_frame64
     mov [rel task_rsp + 8], rax
     mov rdi, TASK2_STACK_TOP
-    lea rsi, [rel scheduler_worker_b64]
+    mov rsi, scheduler_worker_b64
     call scheduler_build_frame64
     mov [rel task_rsp + 16], rax
     mov byte [rel current_task_index], 0
