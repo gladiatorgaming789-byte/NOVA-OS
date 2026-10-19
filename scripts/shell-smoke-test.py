@@ -90,8 +90,8 @@ def main() -> int:
             pattern = re.compile(rb"Firmware E820 entries: 0x(?!0000)[0-9A-F]{4}")
             while time.monotonic() < deadline:
                 if serial_path.exists() and pattern.search(serial_path.read_bytes()):
-                    print("Shell smoke test passed: help and non-empty E820 memory map.")
-                    return 0
+                    print("E820 memory map check passed.")
+                    break
                 time.sleep(0.1)
 
             # Exercise allocation/freeing through the public shell interface.
@@ -117,8 +117,31 @@ def main() -> int:
                     return 0
                 time.sleep(0.1)
 
+            # Exercise the page-backed heap and free-list reuse.
+            for key in ("h", "a", "l", "l", "o", "c", "ret"):
+                monitor.sendall(f"sendkey {key}\\n".encode("ascii"))
+                time.sleep(0.12)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if serial_path.exists() and b"Heap allocation at: 0x" in serial_path.read_bytes():
+                    break
+                time.sleep(0.1)
+            else:
+                output = serial_path.read_text(errors="replace") if serial_path.exists() else ""
+                raise RuntimeError("heap allocation command failed. Captured serial output:\\n" + output)
+
+            for key in ("h", "f", "r", "e", "e", "ret"):
+                monitor.sendall(f"sendkey {key}\\n".encode("ascii"))
+                time.sleep(0.12)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if serial_path.exists() and b"Heap test allocation freed." in serial_path.read_bytes():
+                    print("Shell smoke test passed: help, E820, page alloc/free, and heap alloc/free.")
+                    return 0
+                time.sleep(0.1)
+
             output = serial_path.read_text(errors="replace") if serial_path.exists() else ""
-            raise RuntimeError("page free command failed. Captured serial output:\\n" + output)
+            raise RuntimeError("heap free command failed. Captured serial output:\\n" + output)
         finally:
             if monitor is not None:
                 monitor.close()
