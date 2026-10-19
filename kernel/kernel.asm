@@ -247,37 +247,315 @@ long_mode_entry:
     mov ss, ax
     mov rsp, 0x90000
     cld
-
-    ; Preserve the L serial checkpoint so CI can prove long-mode entry.
     mov al, 'L'
     call serial_putc64
 
-    ; Clear the VGA text buffer and show a real kernel status banner.
+    call screen_clear64
+    mov rsi, banner64
+    call print_string64
+    mov al, 10
+    call put_char64
+    call print_prompt64
+
+.keyboard_loop:
+    call poll_keyboard64
+    test al, al
+    jz .keyboard_loop
+    cmp al, 10
+    je .enter
+    cmp al, 8
+    je .backspace
+    mov ecx, [line_length]
+    cmp ecx, 127
+    jae .keyboard_loop
+    mov [line_buffer + rcx], al
+    inc ecx
+    mov [line_length], ecx
+    call put_char64
+    jmp .keyboard_loop
+.backspace:
+    mov ecx, [line_length]
+    test ecx, ecx
+    jz .keyboard_loop
+    dec ecx
+    mov [line_length], ecx
+    mov byte [line_buffer + rcx], 0
+    mov al, 8
+    call put_char64
+    jmp .keyboard_loop
+.enter:
+    mov ecx, [line_length]
+    mov byte [line_buffer + rcx], 0
+    mov al, 10
+    call put_char64
+    call execute_command64
+    mov dword [line_length], 0
+    mov byte [line_buffer], 0
+    call print_prompt64
+    jmp .keyboard_loop
+
+screen_clear64:
+    push rax
+    push rcx
+    push rdi
     mov rdi, 0xB8000
     mov ax, 0x0720
     mov ecx, 2000
     rep stosw
+    mov dword [screen_cursor], 0
+    pop rdi
+    pop rcx
+    pop rax
+    ret
 
+scroll_screen64:
+    push rax
+    push rcx
+    push rsi
+    push rdi
+    mov rsi, 0xB80A0
     mov rdi, 0xB8000
-    mov rsi, banner64
+    mov ecx, 1920
+    rep movsw
+    mov rdi, 0xB8F00
+    mov ax, 0x0720
+    mov ecx, 80
+    rep stosw
+    mov dword [screen_cursor], 1920
+    pop rdi
+    pop rsi
+    pop rcx
+    pop rax
+    ret
+
+; AL = character. Handles LF, backspace, scrolling, VGA and serial output.
+put_char64:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    mov bl, al
+    cmp bl, 10
+    je .newline
+    cmp bl, 8
+    je .erase
+    cmp bl, 13
+    je .carriage_return
+    mov al, bl
+    call serial_putc64
+    mov eax, [screen_cursor]
+    cmp eax, 2000
+    jb .write_character
+    call scroll_screen64
+.write_character:
+    mov edx, [screen_cursor]
+    mov rdi, 0xB8000
+    mov al, bl
     mov ah, 0x0A
-.print_banner:
+    mov [rdi + rdx*2], ax
+    mov eax, [screen_cursor]
+    inc eax
+    mov [screen_cursor], eax
+    cmp eax, 2000
+    jb .done
+    call scroll_screen64
+    jmp .done
+.newline:
+    mov al, 13
+    call serial_putc64
+    mov al, 10
+    call serial_putc64
+    mov eax, [screen_cursor]
+    xor edx, edx
+    mov ecx, 80
+    div ecx
+    inc eax
+    imul eax, eax, 80
+    mov [screen_cursor], eax
+    cmp eax, 2000
+    jb .done
+    call scroll_screen64
+    jmp .done
+.carriage_return:
+    mov al, 13
+    call serial_putc64
+    jmp .done
+.erase:
+    mov al, 8
+    call serial_putc64
+    mov al, ' '
+    call serial_putc64
+    mov al, 8
+    call serial_putc64
+    mov eax, [screen_cursor]
+    test eax, eax
+    jz .done
+    dec eax
+    mov [screen_cursor], eax
+    mov edx, eax
+    mov rdi, 0xB8000
+    mov ax, 0x0A20
+    mov [rdi + rdx*2], ax
+.done:
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    ret
+
+print_string64:
     lodsb
     test al, al
-    jz .banner_done
-    mov [rdi], ax
-    add rdi, 2
-    call serial_putc64
-    jmp .print_banner
-.banner_done:
-    mov al, 0x0D
-    call serial_putc64
-    mov al, 0x0A
-    call serial_putc64
-.halt:
+    jz .done
+    call put_char64
+    jmp print_string64
+.done:
+    ret
+
+print_prompt64:
+    mov rsi, prompt64
+    call print_string64
+    ret
+
+; Non-blocking PS/2 set-1 scancode polling; no IRQ/IDT is required yet.
+; Returns ASCII in AL or zero when no printable key was pressed.
+poll_keyboard64:
+    push rdx
+    mov dx, 0x64
+    in al, dx
+    test al, 1
+    jz .none
+    mov dx, 0x60
+    in al, dx
+    cmp al, 0xAA
+    je .shift_up
+    cmp al, 0xB6
+    je .shift_up
+    test al, 0x80
+    jnz .none
+    cmp al, 0x2A
+    je .shift_down
+    cmp al, 0x36
+    je .shift_down
+    movzx eax, al
+    mov al, [scan_ascii + rax]
+    test al, al
+    jz .none
+    cmp byte [shift_pressed], 0
+    je .return_key
+    cmp al, 'a'
+    jb .return_key
+    cmp al, 'z'
+    ja .return_key
+    sub al, 32
+.return_key:
+    pop rdx
+    ret
+.shift_down:
+    mov byte [shift_pressed], 1
+    xor eax, eax
+    pop rdx
+    ret
+.shift_up:
+    mov byte [shift_pressed], 0
+.none:
+    xor eax, eax
+    pop rdx
+    ret
+
+execute_command64:
+    mov rsi, line_buffer
+    mov rdi, command_help
+    call strings_equal64
+    test al, al
+    jnz .help
+    mov rsi, line_buffer
+    mov rdi, command_about
+    call strings_equal64
+    test al, al
+    jnz .about
+    mov rsi, line_buffer
+    mov rdi, command_clear
+    call strings_equal64
+    test al, al
+    jnz .clear
+    mov rsi, line_buffer
+    mov rdi, command_reboot
+    call strings_equal64
+    test al, al
+    jnz .reboot
+    cmp byte [line_buffer], 0
+    je .done
+    mov rsi, message_unknown
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.help:
+    mov rsi, message_help
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.about:
+    mov rsi, message_about
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.clear:
+    call screen_clear64
+    mov rsi, banner64
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.reboot:
+    mov rsi, message_reboot
+    call print_string64
+    mov al, 10
+    call put_char64
+.wait_controller:
+    mov dx, 0x64
+    in al, dx
+    test al, 2
+    jnz .wait_controller
+    mov al, 0xFE
+    out 0x64, al
     cli
+.halt:
     hlt
     jmp .halt
+.done:
+    ret
+
+; AL=1 when the zero-terminated strings match; otherwise AL=0.
+strings_equal64:
+    push rsi
+    push rdi
+.compare:
+    mov al, [rsi]
+    cmp al, [rdi]
+    jne .different
+    test al, al
+    jz .same
+    inc rsi
+    inc rdi
+    jmp .compare
+.same:
+    mov al, 1
+    pop rdi
+    pop rsi
+    ret
+.different:
+    xor al, al
+    pop rdi
+    pop rsi
+    ret
 
 BITS 16
 vga_cursor dd 8
@@ -289,3 +567,22 @@ marker_j db 'J', 0
 marker_p db 'P', 0
 BITS 64
 banner64 db 'NOVA OS - 64-bit kernel online', 0
+prompt64 db 'nova> ', 0
+command_help db 'help', 0
+command_about db 'about', 0
+command_clear db 'clear', 0
+command_reboot db 'reboot', 0
+message_help db 'Commands: help, about, clear, reboot', 0
+message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
+message_unknown db 'Unknown command. Type help.', 0
+message_reboot db 'Rebooting NOVA OS...', 0
+line_length dd 0
+screen_cursor dd 0
+shift_pressed db 0
+line_buffer times 128 db 0
+scan_ascii:
+    db 0,0,'1','2','3','4','5','6','7','8','9','0','-','=',8,0
+    db 0,'q','w','e','r','t','y','u','i','o','p','[',']',10,0,'a'
+    db 's','d','f','g','h','j','k','l',';',0x27,0x60,0,0x5C,'z','x','c'
+    db 'v','b','n','m',',','.','/',0,'*',0,' ',0,0,0,0,0
+    times 64 db 0
