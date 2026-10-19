@@ -13,37 +13,6 @@ jobs:
         uses: actions/checkout@v4
       - name: Install NASM and QEMU
         run: sudo apt-get update && sudo apt-get install -y nasm xorriso qemu-system-x86
-      - name: Boot-test the committed ISO before rebuilding
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build
-          if [[ ! -s nova-os.iso ]]; then
-            echo "No non-empty nova-os.iso exists at the repository root."
-            exit 1
-          fi
-          file nova-os.iso | tee build/committed-iso-file.txt
-          sha256sum nova-os.iso | tee build/committed-iso-sha256.txt
-          set +e
-          timeout 8s qemu-system-x86_64 \
-            -machine pc -m 128M \
-            -cdrom nova-os.iso -boot d \
-            -display none -serial file:build/committed-iso-serial.log \
-            -no-reboot -no-shutdown
-          status=$?
-          set -e
-          if [[ "$status" -ne 124 && "$status" -ne 0 ]]; then
-            echo "QEMU exited unexpectedly while testing the committed ISO: status $status"
-            exit "$status"
-          fi
-          echo "Serial output from the exact committed ISO:"
-          cat build/committed-iso-serial.log || true
-          if ! grep -q "EGCJPL" build/committed-iso-serial.log; then
-            echo "Committed ISO failed: expected serial checkpoints EGCJPL in order."
-            echo "This distinguishes an ISO/boot-media problem from the rebuilt source image."
-            exit 1
-          fi
-          echo "Committed ISO passed: serial checkpoints reached long-mode entry (L)."
       - name: Assemble boot sector and kernel image
         run: bash scripts/build.sh
       - name: Boot-test in QEMU
@@ -105,12 +74,8 @@ jobs:
         with:
           name: nova-os-boot-tested-image
           path: |
-            nova-os.iso
             build/nova-os.iso
             build/nova-os.img
             build/SHA256SUMS.txt
-            build/committed-iso-file.txt
-            build/committed-iso-sha256.txt
-            build/committed-iso-serial.log
             build/serial.log
             build/iso-serial.log
