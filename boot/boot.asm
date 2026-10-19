@@ -54,6 +54,13 @@ start:
     jae .read_disk
     mov [sectors_this_read], al
 
+.remaining_limit:
+    mov ax, [sectors_remaining]
+    movzx dx, byte [sectors_this_read]
+    cmp ax, dx
+    jae .read_disk
+    mov [sectors_this_read], al
+
 .read_disk:
     mov ah, 0x02
     mov al, [sectors_this_read]
