@@ -556,6 +556,11 @@ execute_command64:
     call strings_equal64
     test al, al
     jnz .reboot
+    mov rsi, line_buffer
+    mov rdi, command_memory
+    call strings_equal64
+    test al, al
+    jnz .memory
     cmp byte [line_buffer], 0
     je .done
     mov rsi, message_unknown
