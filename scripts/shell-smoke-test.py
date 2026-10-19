@@ -96,7 +96,7 @@ def main() -> int:
 
             # Exercise allocation/freeing through the public shell interface.
             for key in ("a", "l", "l", "o", "c", "ret"):
-                monitor.sendall(f"sendkey {key}\\n".encode("ascii"))
+                monitor.sendall(f"sendkey {key}\n".encode("ascii"))
                 time.sleep(0.12)
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
@@ -105,10 +105,10 @@ def main() -> int:
                 time.sleep(0.1)
             else:
                 output = serial_path.read_text(errors="replace") if serial_path.exists() else ""
-                raise RuntimeError("page allocation command failed. Captured serial output:\\n" + output)
+                raise RuntimeError("page allocation command failed. Captured serial output:\n" + output)
 
             for key in ("f", "r", "e", "e", "ret"):
-                monitor.sendall(f"sendkey {key}\\n".encode("ascii"))
+                monitor.sendall(f"sendkey {key}\n".encode("ascii"))
                 time.sleep(0.12)
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
@@ -119,7 +119,7 @@ def main() -> int:
 
             # Exercise the page-backed heap and free-list reuse.
             for key in ("h", "a", "l", "l", "o", "c", "ret"):
-                monitor.sendall(f"sendkey {key}\\n".encode("ascii"))
+                monitor.sendall(f"sendkey {key}\n".encode("ascii"))
                 time.sleep(0.12)
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
@@ -128,10 +128,10 @@ def main() -> int:
                 time.sleep(0.1)
             else:
                 output = serial_path.read_text(errors="replace") if serial_path.exists() else ""
-                raise RuntimeError("heap allocation command failed. Captured serial output:\\n" + output)
+                raise RuntimeError("heap allocation command failed. Captured serial output:\n" + output)
 
             for key in ("h", "f", "r", "e", "e", "ret"):
-                monitor.sendall(f"sendkey {key}\\n".encode("ascii"))
+                monitor.sendall(f"sendkey {key}\n".encode("ascii"))
                 time.sleep(0.12)
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
@@ -141,7 +141,7 @@ def main() -> int:
                 time.sleep(0.1)
 
             output = serial_path.read_text(errors="replace") if serial_path.exists() else ""
-            raise RuntimeError("heap free command failed. Captured serial output:\\n" + output)
+            raise RuntimeError("heap free command failed. Captured serial output:\n" + output)
         finally:
             if monitor is not None:
                 monitor.close()
