@@ -16,6 +16,9 @@ USER_STACK_VIRT equ 0x600000
 USER_STACK_TOP equ 0x600FF0
 USER_CODE_SEL equ 0x2B
 USER_DATA_SEL equ 0x33
+FS_SUPER_LBA equ 0
+FS_DATA_LBA equ 1
+FS_MAX_FILE_SIZE equ 500
 
 kernel_entry:
     cli
@@ -625,6 +628,16 @@ execute_command64:
     test al, al
     jnz .schedtest
     mov rsi, line_buffer
+    mov rdi, command_ls
+    call strings_equal64
+    test al, al
+    jnz .fs_ls
+    mov rsi, line_buffer
+    mov rdi, command_cat
+    call strings_equal64
+    test al, al
+    jnz .fs_cat
+    mov rsi, line_buffer
     mov rdi, command_usertest
     call strings_equal64
     test al, al
@@ -634,6 +647,11 @@ execute_command64:
     call strings_equal64
     test al, al
     jnz .userfaulttest
+    mov rsi, line_buffer
+    mov rdi, command_write_prefix
+    call string_starts_with64
+    test al, al
+    jnz .fs_write
     mov rsi, line_buffer
     mov rdi, command_uptime
     call strings_equal64
@@ -842,6 +860,15 @@ execute_command64:
     mov al, 10
     call put_char64
     jmp .done
+.fs_ls:
+    call fs_list64
+    jmp .done
+.fs_cat:
+    call fs_cat64
+    jmp .done
+.fs_write:
+    call fs_write64
+    jmp .done
 .usertest:
     xor edi, edi
     call user_test_run64
@@ -946,6 +973,353 @@ strings_equal64:
     ret
 
 
+
+; ATA primary-master PIO sector access (LBA28), for a separate writable IDE disk.
+; EAX=LBA, RDI=buffer for read; EAX=LBA, RSI=buffer for write. EAX=1 success.
+ata_wait_drq64:
+    push rdx
+    push rcx
+    mov dx, 0x1F7
+    mov ecx, 0x100000
+.wait:
+    in al, dx
+    test al, 0x80
+    jnz .again
+    test al, 0x21
+    jnz .fail
+    test al, 0x08
+    jnz .ok
+.again:
+    loop .wait
+.fail:
+    xor eax, eax
+    pop rcx
+    pop rdx
+    ret
+.ok:
+    mov eax, 1
+    pop rcx
+    pop rdx
+    ret
+
+ata_wait_complete64:
+    push rdx
+    push rcx
+    mov dx, 0x1F7
+    mov ecx, 0x100000
+.wait:
+    in al, dx
+    test al, 0x80
+    jnz .again
+    test al, 0x21
+    jnz .fail
+    mov eax, 1
+    pop rcx
+    pop rdx
+    ret
+.again:
+    loop .wait
+.fail:
+    xor eax, eax
+    pop rcx
+    pop rdx
+    ret
+
+ata_read_sector64:
+    push rbx
+    push r12
+    push r13
+    mov r12d, eax
+    mov r13, rdi
+    mov dx, 0x1F6
+    mov eax, r12d
+    shr eax, 24
+    and al, 0x0F
+    or al, 0xE0
+    out dx, al
+    mov dx, 0x1F2
+    mov al, 1
+    out dx, al
+    mov eax, r12d
+    mov dx, 0x1F3
+    out dx, al
+    shr eax, 8
+    mov dx, 0x1F4
+    out dx, al
+    shr eax, 8
+    mov dx, 0x1F5
+    out dx, al
+    mov dx, 0x1F7
+    mov al, 0x20
+    out dx, al
+    call ata_wait_drq64
+    test eax, eax
+    jz .fail
+    mov dx, 0x1F0
+    mov rdi, r13
+    mov ecx, 256
+    rep insw
+    mov eax, 1
+    jmp .done
+.fail:
+    xor eax, eax
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+ata_write_sector64:
+    push rbx
+    push r12
+    push r13
+    mov r12d, eax
+    mov r13, rsi
+    mov dx, 0x1F6
+    mov eax, r12d
+    shr eax, 24
+    and al, 0x0F
+    or al, 0xE0
+    out dx, al
+    mov dx, 0x1F2
+    mov al, 1
+    out dx, al
+    mov eax, r12d
+    mov dx, 0x1F3
+    out dx, al
+    shr eax, 8
+    mov dx, 0x1F4
+    out dx, al
+    shr eax, 8
+    mov dx, 0x1F5
+    out dx, al
+    mov dx, 0x1F7
+    mov al, 0x30
+    out dx, al
+    call ata_wait_drq64
+    test eax, eax
+    jz .fail
+    mov dx, 0x1F0
+    mov rsi, r13
+    mov ecx, 256
+    rep outsw
+    mov dx, 0x1F7
+    mov al, 0xE7
+    out dx, al
+    call ata_wait_complete64
+    jmp .done
+.fail:
+    xor eax, eax
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+string_starts_with64:
+    push rsi
+    push rdi
+.compare:
+    mov al, [rdi]
+    test al, al
+    jz .yes
+    cmp al, [rsi]
+    jne .no
+    inc rsi
+    inc rdi
+    jmp .compare
+.yes:
+    mov al, 1
+    pop rdi
+    pop rsi
+    ret
+.no:
+    xor al, al
+    pop rdi
+    pop rsi
+    ret
+
+; Minimal one-file filesystem on a dedicated disk: LBA0 metadata, LBA1 data.
+; Metadata signature "NOVAFS1", byte length at +8, filename at +12.
+fs_read_header64:
+    mov eax, FS_SUPER_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .fail
+    mov rsi, fs_sector_buffer
+    mov rdi, fs_magic
+    mov ecx, 7
+.compare:
+    mov al, [rsi]
+    cmp al, [rdi]
+    jne .fail
+    inc rsi
+    inc rdi
+    loop .compare
+    mov eax, [rel fs_sector_buffer + 8]
+    cmp eax, FS_MAX_FILE_SIZE
+    ja .fail
+    mov eax, 1
+    ret
+.fail:
+    xor eax, eax
+    ret
+
+fs_list64:
+    call fs_read_header64
+    test eax, eax
+    jz .invalid
+    mov rsi, message_fs_list
+    call print_string64
+    mov eax, [rel fs_sector_buffer + 8]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    ret
+.invalid:
+    mov rsi, message_fs_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+
+fs_cat64:
+    call fs_read_header64
+    test eax, eax
+    jz .invalid
+    mov ecx, [rel fs_sector_buffer + 8]
+    test ecx, ecx
+    jz .empty
+    push rcx
+    mov eax, FS_DATA_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .disk_error
+    pop rcx
+    mov rsi, message_fs_read
+    call print_string64
+.print:
+    test ecx, ecx
+    jz .done
+    mov al, [rsi + fs_sector_buffer - message_fs_read] ; replaced below by explicit buffer pointer
+    jmp .emit
+.emit:
+    call put_char64
+    inc rsi
+    dec ecx
+    jmp .print
+.done:
+    mov al, 10
+    call put_char64
+    ret
+.empty:
+    mov rsi, message_fs_empty
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.disk_error:
+    pop rcx
+.invalid:
+    mov rsi, message_fs_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+
+fs_write64:
+    ; Require at least one byte after "write " and keep a sector-sized bound.
+    mov ecx, [rel line_length]
+    cmp ecx, 6
+    jbe .usage
+    sub ecx, 6
+    cmp ecx, FS_MAX_FILE_SIZE
+    ja .usage
+    mov [rel fs_file_size], ecx
+    ; If LBA0 is all zero, initialize it; never overwrite unknown media.
+    mov eax, FS_SUPER_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .disk_error
+    mov rsi, fs_sector_buffer
+    mov ecx, 512
+.check_blank:
+    cmp byte [rsi], 0
+    jne .check_magic
+    inc rsi
+    loop .check_blank
+    jmp .build_header
+.check_magic:
+    mov rsi, fs_sector_buffer
+    mov rdi, fs_magic
+    mov ecx, 7
+.check_signature:
+    mov al, [rsi]
+    cmp al, [rdi]
+    jne .invalid
+    inc rsi
+    inc rdi
+    loop .check_signature
+.build_header:
+    lea rdi, [rel fs_sector_buffer]
+    xor eax, eax
+    mov ecx, 64
+    rep stosq
+    mov rsi, fs_magic
+    lea rdi, [rel fs_sector_buffer]
+    mov ecx, 7
+    rep movsb
+    mov eax, [rel fs_file_size]
+    mov [rel fs_sector_buffer + 8], eax
+    mov rsi, fs_filename
+    lea rdi, [rel fs_sector_buffer + 12]
+    mov ecx, 8
+    rep movsb
+    mov eax, FS_SUPER_LBA
+    lea rsi, [rel fs_sector_buffer]
+    call ata_write_sector64
+    test eax, eax
+    jz .disk_error
+    ; Zero the sector, then copy the command payload without its prefix.
+    lea rdi, [rel fs_sector_buffer]
+    xor eax, eax
+    mov ecx, 64
+    rep stosq
+    mov ecx, [rel fs_file_size]
+    lea rsi, [rel line_buffer + 6]
+    lea rdi, [rel fs_sector_buffer]
+    rep movsb
+    mov eax, FS_DATA_LBA
+    lea rsi, [rel fs_sector_buffer]
+    call ata_write_sector64
+    test eax, eax
+    jz .disk_error
+    mov rsi, message_fs_written
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.usage:
+    mov rsi, message_fs_write_usage
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.invalid:
+    mov rsi, message_fs_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.disk_error:
+    mov rsi, message_fs_no_disk
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
 
 ; Physical memory manager: bitmap tracks the first 1 GiB in 4 KiB pages.
 ; Bitmap bit 1 = reserved/allocated; bit 0 = available. Keep low 1 MiB
@@ -1964,6 +2338,13 @@ command_pmmtest db 'pmmtest', 0
 command_schedtest db 'schedtest', 0
 command_usertest db 'usertest', 0
 command_userfaulttest db 'userfaulttest', 0
+command_ls db 'ls', 0
+command_cat db 'cat', 0
+fs_magic db 'NOVAFS1'
+fs_filename db 'NOVA.TXT'
+fs_sector_buffer times 512 db 0
+fs_file_size dd 0
+command_write_prefix db 'write ', 0
 message_help db 'Commands: help, about, clear, memory, alloc, free, pmmtest, schedtest, usertest, userfaulttest, heap, halloc, hfree, uptime, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
@@ -1983,6 +2364,13 @@ message_uservm_failed db 'User VM setup failed: no physical pages available.', 0
 message_user_exit db 'Ring-3 program exited through syscall.', 0
 message_user_fault db 'User process faulted; terminated safely.', 0
 message_user_bad_syscall db 'User process made an invalid syscall; terminated.', 0
+message_fs_no_disk db 'Storage unavailable: attach a writable IDE data disk.', 0
+message_fs_invalid db 'Storage is unformatted or has an invalid NOVA filesystem header.', 0
+message_fs_empty db 'NOVA.TXT is empty or does not exist.', 0
+message_fs_written db 'Saved NOVA.TXT to persistent storage.', 0
+message_fs_list db 'NOVA.TXT bytes: 0x', 0
+message_fs_read db 'NOVA.TXT: ', 0
+message_fs_write_usage db 'Usage: write <text> (maximum 500 bytes).', 0
 message_heap_status db 'Heap pages allocated: 0x', 0
 message_heap_allocated db 'Heap allocation at: 0x', 0
 message_heap_already db 'A heap test allocation already exists; use hfree first.', 0
