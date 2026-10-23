@@ -12,13 +12,17 @@ from pathlib import Path
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: shell-smoke-test.py PATH_TO_DISK_IMAGE", file=sys.stderr)
+    if len(sys.argv) not in (2, 3):
+        print("usage: shell-smoke-test.py PATH_TO_BOOT_IMAGE [PATH_TO_DATA_DISK]", file=sys.stderr)
         return 2
 
     image = Path(sys.argv[1]).resolve()
+    data_disk = Path(sys.argv[2]).resolve() if len(sys.argv) == 3 else None
     if not image.is_file():
         print(f"image not found: {image}", file=sys.stderr)
+        return 2
+    if data_disk is not None and not data_disk.is_file():
+        print(f"data disk not found: {data_disk}", file=sys.stderr)
         return 2
 
     with tempfile.TemporaryDirectory(prefix="nova-shell-test-") as temp:
@@ -37,6 +41,9 @@ def main() -> int:
             "-no-reboot",
             "-no-shutdown",
         ]
+
+        if data_disk is not None:
+            command.extend(["-drive", f"file={data_disk},format=raw,if=ide,index=0"])
 
         process = subprocess.Popen(
             command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
@@ -141,6 +148,37 @@ def main() -> int:
             )
             print("User fault isolation and shell recovery passed.")
 
+            if data_disk is not None:
+                write_pattern = re.escape(b"Saved NOVA.TXT to persistent storage.")
+                run_command(
+                    ("w", "r", "i", "t", "e", "spc", "h", "e", "l", "l", "o",
+                     "spc", "f", "r", "o", "m", "spc", "N", "O", "V", "A", "ret"),
+                    write_pattern,
+                    "persistent file write",
+                    timeout=8,
+                )
+                print("Persistent file write passed.")
+
+                ls_pattern = rb"NOVA\.TXT bytes: 0x[0-9A-F]{8}"
+                run_command(("l", "s", "ret"), ls_pattern, "filesystem directory listing")
+                cat_pattern = re.escape(b"NOVA.TXT: hello from NOVA")
+                run_command(("c", "a", "t", "ret"), cat_pattern, "filesystem file read")
+                print("Filesystem ls/cat checks passed.")
+
+                banner_pattern = re.escape(b"NOVA OS - 64-bit kernel online")
+                old_banner_count = len(re.findall(banner_pattern, output()))
+                monitor.sendall(b"system_reset\\n")
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    if len(re.findall(banner_pattern, output())) > old_banner_count:
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise RuntimeError("VM did not reboot for filesystem persistence test")
+                run_command(("c", "a", "t", "ret"), cat_pattern,
+                            "file contents after reboot", previous_count=1, timeout=8)
+                print("Filesystem persistence across reboot passed.")
+
             page_alloc_pattern = rb"Allocated physical page: 0x[0-9A-F]{8,16}"
             run_command(("a", "l", "l", "o", "c", "ret"), page_alloc_pattern,
                         "physical page allocation")
@@ -178,7 +216,7 @@ def main() -> int:
             freed_count = len(re.findall(hfree_pattern, output()))
             run_command(("h", "f", "r", "e", "e", "ret"), hfree_pattern,
                         "second heap free", freed_count)
-            print("Shell smoke test passed: help, E820, physical alloc/free, heap alloc/free, and heap reuse.")
+            print("Shell smoke test passed: scheduler, ring-3 isolation, memory, heap, and available filesystem checks.")
             return 0
         finally:
             if monitor is not None:
