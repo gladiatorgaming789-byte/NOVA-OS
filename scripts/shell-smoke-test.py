@@ -167,7 +167,9 @@ def main() -> int:
 
                 banner_pattern = re.escape(b"NOVA OS - 64-bit kernel online")
                 old_banner_count = len(re.findall(banner_pattern, output()))
-                monitor.sendall(b"system_reset\\n")
+                reboot_pattern = re.escape(b"Rebooting NOVA OS...")
+                run_command(("r", "e", "b", "o", "o", "t", "ret"),
+                            reboot_pattern, "filesystem persistence reboot", timeout=5)
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
                     if len(re.findall(banner_pattern, output())) > old_banner_count:
