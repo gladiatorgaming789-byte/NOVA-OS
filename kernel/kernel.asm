@@ -883,6 +883,12 @@ execute_command64:
     call print_hex32
     mov al, 10
     call put_char64
+    mov rsi, message_ps_user
+    call print_string64
+    movzx eax, byte [rel user_process_state]
+    call print_hex32
+    mov al, 10
+    call put_char64
     jmp .done
 .schedtest:
     cmp qword [rel scheduler_counter_a], 0
@@ -2826,6 +2832,7 @@ message_schedtest_fail db 'Scheduler test FAILED: a worker task did not run.', 0
 message_ps_foreground db 'Task 0: foreground shell / user-program context', 0
 message_ps_worker_a db 'Task 1: worker-a iterations: 0x', 0
 message_ps_worker_b db 'Task 2: worker-b iterations: 0x', 0
+message_ps_user db 'Task 3: user ELF state (0=stopped, 1=runnable): 0x', 0
 message_uservm_failed db 'User VM setup failed: no physical pages available.', 0
 message_user_exit db 'Ring-3 program exited through syscall.', 0
 message_user_fault db 'User process faulted; terminated safely.', 0
