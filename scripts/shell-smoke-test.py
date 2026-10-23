@@ -183,7 +183,7 @@ def main() -> int:
                 install_pattern = re.escape(b"Installed NOVA.ELF on persistent storage.")
                 run_command(("i", "n", "s", "t", "a", "l", "l", "ret"),
                             install_pattern, "ELF install to filesystem", timeout=8)
-                elf_listing_pattern = rb"NOVA\\.ELF bytes: 0x[0-9A-F]{8}"
+                elf_listing_pattern = rb"NOVA\.ELF bytes: 0x[0-9A-F]{8}"
                 run_command(("l", "s", "ret"), elf_listing_pattern,
                             "ELF file listing")
                 elf_output_pattern = re.escape(b"NOVA ELF64 program loaded from disk")
