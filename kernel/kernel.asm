@@ -1260,44 +1260,12 @@ kfree64:
 ; PIT-driven context switching. Their stacks use reserved, unused low memory.
 scheduler_init64:
     mov qword [rel task_rsp], 0
-    mov rdi, TASK1_STACK_TOP
-    mov rsi, scheduler_worker_a64
-    call scheduler_build_frame64
-    mov [rel task_rsp + 8], rax
-    mov rdi, TASK2_STACK_TOP
-    mov rsi, scheduler_worker_b64
-    call scheduler_build_frame64
-    mov [rel task_rsp + 16], rax
+    mov qword [rel task_rsp + 8], 0
+    mov qword [rel task_rsp + 16], 0
+    mov byte [rel task_started], 1
+    mov byte [rel task_started + 1], 0
+    mov byte [rel task_started + 2], 0
     mov byte [rel current_task_index], 0
-    ret
-
-; RDI = stack top, RSI = entry. Build the same register/iret frame that IRQ0
-; restores. Initial RFLAGS enables timer preemption after the first task switch.
-scheduler_build_frame64:
-    push rbx
-    mov rbx, rsp
-    mov rsp, rdi
-    push qword 0x202
-    push qword CODE64_SEL
-    push rsi
-    push qword 0                 ; RAX
-    push qword 0                 ; RCX
-    push qword 0                 ; RDX
-    push qword 0                 ; RBX
-    push qword 0                 ; RBP
-    push qword 0                 ; RSI
-    push qword 0                 ; RDI
-    push qword 0                 ; R8
-    push qword 0                 ; R9
-    push qword 0                 ; R10
-    push qword 0                 ; R11
-    push qword 0                 ; R12
-    push qword 0                 ; R13
-    push qword 0                 ; R14
-    push qword 0                 ; R15
-    mov rax, rsp
-    mov rsp, rbx
-    pop rbx
     ret
 
 scheduler_worker_a64:
@@ -1388,8 +1356,6 @@ irq0_handler64:
     push r13
     push r14
     push r15
-    mov al, '1'
-    call serial_putc64
 
     inc dword [rel timer_ticks]
     movzx eax, byte [rel current_task_index]
@@ -1403,9 +1369,28 @@ irq0_handler64:
 .next_task_ready:
     mov [rel current_task_index], al
     movzx eax, al
+    ; A zero saved RSP means this task has never run. Start it directly on
+    ; its dedicated stack rather than manufacturing an iret frame.
+    lea rdx, [rel task_rsp]
+    cmp qword [rdx + rax*8], 0
+    jne .resume_task
+    lea rdx, [rel task_started]
+    mov byte [rdx + rax], 1
+    mov al, 0x20
+    out 0x20, al
+    cmp byte [rel current_task_index], 1
+    je .start_task_a
+    mov rsp, TASK2_STACK_TOP
+    sti
+    jmp scheduler_worker_b64
+.start_task_a:
+    mov rsp, TASK1_STACK_TOP
+    sti
+    jmp scheduler_worker_a64
+
+.resume_task:
     lea rdx, [rel task_rsp]
     mov rsp, [rdx + rax*8]
-
     mov al, 0x20
     out 0x20, al
     pop r15
@@ -1615,6 +1600,7 @@ timer_ticks dd 0
 free_page_count dd 0
 test_alloc_page dq 0
 current_task_index db 0
+task_started times 3 db 0
 align 8
 task_rsp times 3 dq 0
 scheduler_counter_a dq 0
