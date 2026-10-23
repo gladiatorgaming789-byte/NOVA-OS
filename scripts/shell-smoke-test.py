@@ -246,7 +246,7 @@ def main() -> int:
                     raise RuntimeError("VM did not reboot before persisted ELF execution test")
                 persisted_cat_pattern = re.escape(b"File: user process wrote persistent data")
                 run_command(("c", "a", "t", "ret"), persisted_cat_pattern,
-                            "user-written file survives reboot", previous_count=1)
+                            "user-written file survives reboot")
                 previous_file_reads = len(re.findall(payload_pattern, output()))
                 previous_exits = len(re.findall(exit_pattern, output()))
                 previous_yields = len(re.findall(yield_pattern, output()))
