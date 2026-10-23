@@ -1301,6 +1301,8 @@ scheduler_build_frame64:
     ret
 
 scheduler_worker_a64:
+    mov al, 'A'
+    call serial_putc64
 .loop:
     inc qword [rel scheduler_counter_a]
     pause
