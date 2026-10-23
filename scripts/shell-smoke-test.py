@@ -194,7 +194,12 @@ def main() -> int:
                 elf_output_pattern = re.escape(b"NOVA ELF64 program loaded from disk")
                 run_command(("e", "x", "e", "c", "ret"), elf_output_pattern,
                             "ELF64 load and ring-3 execution", timeout=8)
-                print("ELF64 disk loader and ring-3 execution passed.")
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline and b"hello from nova" not in output():
+                    time.sleep(0.1)
+                if b"hello from nova" not in output():
+                    raise RuntimeError("ELF program could not read NOVA.TXT through syscall 4")
+                print("ELF64 loader, ring-3 execution, and file-read syscall passed.")
 
                 old_banner_count = len(re.findall(banner_pattern, output()))
                 reboot_pattern = re.escape(b"Rebooting NOVA OS...")
