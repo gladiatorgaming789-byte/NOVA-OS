@@ -1365,7 +1365,12 @@ fs_list64:
     cmp dword [rel fs_sector_buffer + 8], 0
     je .slot1
     lea rsi, [rel fs_sector_buffer + 12]
-    call print_string64
+    mov ecx, 8
+.name0:
+    mov al, [rsi]
+    call put_char64
+    inc rsi
+    loop .name0
     mov rsi, message_fs_list
     call print_string64
     mov eax, [rel fs_sector_buffer + 8]
@@ -1376,7 +1381,12 @@ fs_list64:
     cmp dword [rel fs_sector_buffer + 28], 0
     je .done
     lea rsi, [rel fs_sector_buffer + 20]
-    call print_string64
+    mov ecx, 8
+.name1:
+    mov al, [rsi]
+    call put_char64
+    inc rsi
+    loop .name1
     mov rsi, message_fs_list
     call print_string64
     mov eax, [rel fs_sector_buffer + 28]
