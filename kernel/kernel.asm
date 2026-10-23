@@ -2604,7 +2604,6 @@ message_fs_write_usage db 'Usage: write <text> (maximum 121 bytes).', 0
 message_fs_installed db 'Installed NOVA.ELF on persistent storage.', 0
 message_fs_elf_invalid db 'NOVA.ELF is invalid or unsupported.', 0
 message_fs_exec_failed db 'Could not load NOVA.ELF from storage.', 0
-message_fs_list db 'NOVA.TXT bytes: 0x', 0
 message_heap_status db 'Heap pages allocated: 0x', 0
 message_heap_allocated db 'Heap allocation at: 0x', 0
 message_heap_already db 'A heap test allocation already exists; use hfree first.', 0
