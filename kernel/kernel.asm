@@ -2150,7 +2150,14 @@ syscall80_handler64:
     je .exit
     cmp eax, 4
     je .file_read
+    cmp eax, 6
+    je .yield
     jmp user_bad_syscall_exit64
+.yield:
+    ; Reuse the timer preemption path so a ring-3 task can voluntarily yield.
+    ; The IRQ handler saves this kernel syscall context and resumes it later.
+    int 0x20
+    iretq
 .write:
     cmp rsi, 1024
     ja user_bad_syscall_exit64
@@ -2772,12 +2779,26 @@ user_elf_entry:
     mov rdi, USER_STACK_VIRT + 0x800
     mov eax, 1
     int 0x80
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_elf_yield_message - user_elf_start)
+    mov esi, user_elf_yield_message_end - user_elf_yield_message
+    int 0x80
+    mov eax, 6
+    int 0x80
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_elf_resumed_message - user_elf_start)
+    mov esi, user_elf_resumed_message_end - user_elf_resumed_message
+    int 0x80
 .elf_exit:
     mov eax, 2
     int 0x80
     jmp $
 user_elf_message db 'NOVA ELF64 program loaded from disk: ', 10
 user_elf_message_end:
+user_elf_yield_message db 'NOVA ELF task yielding to scheduler', 10
+user_elf_yield_message_end:
+user_elf_resumed_message db 'NOVA ELF task resumed after yield', 10
+user_elf_resumed_message_end:
 user_elf_end:
 
 align 8
