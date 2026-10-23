@@ -215,7 +215,12 @@ def main() -> int:
                     time.sleep(0.1)
                 else:
                     raise RuntimeError("scheduled ELF process did not read NOVA.TXT and exit")
-                print("ELF64 loader, independent task scheduling, and file-read syscall passed.")
+                ps_stopped_pattern = re.escape(
+                    b"Task 3: user ELF state (0=stopped, 1=runnable): 0x00000000"
+                )
+                run_command(("p", "s", "ret"), ps_stopped_pattern,
+                            "user process state after exit", previous_count=1)
+                print("ELF64 loader, independent task scheduling, file-read syscall, and process exit passed.")
 
                 old_banner_count = len(re.findall(banner_pattern, output()))
                 reboot_pattern = re.escape(b"Rebooting NOVA OS...")
