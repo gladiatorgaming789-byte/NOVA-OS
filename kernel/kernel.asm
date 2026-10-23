@@ -18,6 +18,7 @@ USER_CODE_SEL equ 0x2B
 USER_DATA_SEL equ 0x33
 FS_SUPER_LBA equ 0
 FS_DATA_LBA equ 1
+FS_ELF_LBA equ 2
 FS_MAX_FILE_SIZE equ 500
 
 kernel_entry:
@@ -1021,9 +1022,20 @@ fs_install64:
     lea rdi, [rel fs_sector_buffer]
     mov ecx, 7
     rep movsb
-    mov [rel fs_sector_buffer + 8], r12d
+    jmp .ready_header
+.initialize_header:
+    lea rdi, [rel fs_sector_buffer]
+    xor eax, eax
+    mov ecx, 64
+    rep stosq
+    lea rsi, [rel fs_magic]
+    lea rdi, [rel fs_sector_buffer]
+    mov ecx, 7
+    rep movsb
+.ready_header:
+    mov [rel fs_sector_buffer + 28], r12d
     lea rsi, [rel fs_elf_filename]
-    lea rdi, [rel fs_sector_buffer + 12]
+    lea rdi, [rel fs_sector_buffer + 20]
     mov ecx, 8
     rep movsb
     mov eax, FS_SUPER_LBA
@@ -1039,7 +1051,7 @@ fs_install64:
     lea rdi, [rel fs_sector_buffer]
     mov ecx, r12d
     rep movsb
-    mov eax, FS_DATA_LBA
+    mov eax, FS_ELF_LBA
     lea rsi, [rel fs_sector_buffer]
     call ata_write_sector64
     test eax, eax
@@ -1078,10 +1090,10 @@ fs_exec64:
     call fs_read_header64
     test eax, eax
     jz .failed
-    mov r12d, [rel fs_sector_buffer + 8]
+    mov r12d, [rel fs_sector_buffer + 28]
     cmp r12d, 120
     jb .invalid
-    mov eax, FS_DATA_LBA
+    mov eax, FS_ELF_LBA
     lea rdi, [rel fs_sector_buffer]
     call ata_read_sector64
     test eax, eax
@@ -1347,6 +1359,9 @@ fs_read_header64:
     mov eax, [rel fs_sector_buffer + 8]
     cmp eax, FS_MAX_FILE_SIZE
     ja .fail
+    mov eax, [rel fs_sector_buffer + 28]
+    cmp eax, FS_MAX_FILE_SIZE
+    ja .fail
     mov eax, 1
     ret
 .fail:
@@ -1357,6 +1372,8 @@ fs_list64:
     call fs_read_header64
     test eax, eax
     jz .invalid
+    cmp dword [rel fs_sector_buffer + 8], 0
+    je .slot1
     lea rsi, [rel fs_sector_buffer + 12]
     call print_string64
     mov rsi, message_fs_list
@@ -1365,6 +1382,18 @@ fs_list64:
     call print_hex32
     mov al, 10
     call put_char64
+.slot1:
+    cmp dword [rel fs_sector_buffer + 28], 0
+    je .done
+    lea rsi, [rel fs_sector_buffer + 20]
+    call print_string64
+    mov rsi, message_fs_list
+    call print_string64
+    mov eax, [rel fs_sector_buffer + 28]
+    call print_hex32
+    mov al, 10
+    call put_char64
+.done:
     ret
 .invalid:
     mov rsi, message_fs_invalid
@@ -1439,7 +1468,7 @@ fs_write64:
     jne .check_magic
     inc rsi
     loop .check_blank
-    jmp .build_header
+    jmp .initialize_header
 .check_magic:
     mov rsi, fs_sector_buffer
     mov rdi, fs_magic
@@ -1451,18 +1480,20 @@ fs_write64:
     inc rsi
     inc rdi
     loop .check_signature
-.build_header:
+    jmp .update_header
+.initialize_header:
     lea rdi, [rel fs_sector_buffer]
     xor eax, eax
     mov ecx, 64
     rep stosq
-    mov rsi, fs_magic
+    lea rsi, [rel fs_magic]
     lea rdi, [rel fs_sector_buffer]
     mov ecx, 7
     rep movsb
+.update_header:
     mov eax, [rel fs_file_size]
     mov [rel fs_sector_buffer + 8], eax
-    mov rsi, fs_filename
+    lea rsi, [rel fs_filename]
     lea rdi, [rel fs_sector_buffer + 12]
     mov ecx, 8
     rep movsb
