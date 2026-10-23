@@ -1577,6 +1577,7 @@ syscall80_handler64:
     pop r12
     pop rbx
     pop rbp
+    sti                         ; exception/syscall gate cleared IF; restore shell IRQs
     ret
 
 user_bad_syscall_exit64:
@@ -1593,6 +1594,7 @@ user_bad_syscall_exit64:
     pop r12
     pop rbx
     pop rbp
+    sti                         ; exception/syscall gate cleared IF; restore shell IRQs
     ret
 
 user_fault_exit64:
@@ -1609,6 +1611,7 @@ user_fault_exit64:
     pop r12
     pop rbx
     pop rbp
+    sti                         ; exception/syscall gate cleared IF; restore shell IRQs
     ret
 
 ; Minimal timer-preemptive round-robin scheduler. Task 0 is the existing
