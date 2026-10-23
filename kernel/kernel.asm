@@ -10,6 +10,12 @@ PD_ADDR   equ 0x92000
 VGA_TEXT_ADDR equ 0xB8000
 TASK1_STACK_TOP equ 0x88000
 TASK2_STACK_TOP equ 0x8C000
+TSS_STACK_TOP equ 0x8E000
+USER_CODE_VIRT equ 0x400000
+USER_STACK_VIRT equ 0x600000
+USER_STACK_TOP equ 0x600FF0
+USER_CODE_SEL equ 0x2B
+USER_DATA_SEL equ 0x33
 
 kernel_entry:
     cli
@@ -155,6 +161,13 @@ gdt_code64:
     dq 0x00AF9A000000FFFF
 gdt_data64:
     dq 0x00CF92000000FFFF
+gdt_user_code64:
+    dq 0x00AFFA000000FFFF
+gdt_user_data64:
+    dq 0x00CFF2000000FFFF
+gdt_tss:
+    dq 0
+    dq 0
 gdt_end:
 
 gdt_descriptor:
@@ -301,6 +314,7 @@ long_mode_entry:
     call serial_putc64
 
     ; Install exception and hardware IRQ gates before enabling interrupts.
+    call tss_init64
     call init_idt64
     call pic_init64
     call pit_init64
@@ -611,6 +625,16 @@ execute_command64:
     test al, al
     jnz .schedtest
     mov rsi, line_buffer
+    mov rdi, command_usertest
+    call strings_equal64
+    test al, al
+    jnz .usertest
+    mov rsi, line_buffer
+    mov rdi, command_userfaulttest
+    call strings_equal64
+    test al, al
+    jnz .userfaulttest
+    mov rsi, line_buffer
     mov rdi, command_uptime
     call strings_equal64
     test al, al
@@ -817,6 +841,14 @@ execute_command64:
     call print_string64
     mov al, 10
     call put_char64
+    jmp .done
+.usertest:
+    xor edi, edi
+    call user_test_run64
+    jmp .done
+.userfaulttest:
+    mov edi, 1
+    call user_test_run64
     jmp .done
 .uptime:
     mov rsi, message_uptime
@@ -1249,6 +1281,336 @@ kfree64:
     pop rbx
     ret
 
+; Install a 64-bit TSS. Ring-3 interrupts use a dedicated kernel stack.
+tss_init64:
+    mov qword [rel tss64 + 4], TSS_STACK_TOP
+    mov word [rel tss64 + 102], 104
+    mov rdx, tss64
+    mov rax, rdx
+    and eax, 0xFFFF
+    shl rax, 16
+    mov r8, rdx
+    shr r8, 16
+    and r8d, 0xFF
+    shl r8, 32
+    or rax, r8
+    mov r8, 0x89
+    shl r8, 40
+    or rax, r8
+    mov r8, rdx
+    shr r8, 24
+    and r8d, 0xFF
+    shl r8, 56
+    or rax, r8
+    or rax, 103
+    mov [rel gdt_tss], rax
+    mov rax, rdx
+    shr rax, 32
+    mov [rel gdt_tss + 8], rax
+    mov ax, gdt_tss - gdt_start
+    ltr ax
+    ret
+
+; Allocate a private page-table hierarchy and two user pages. The kernel
+; remains identity-mapped supervisor-only; only the selected code and stack
+; PTEs receive the user bit. This first address space is intentionally small.
+user_vm_init64:
+    cmp qword [rel user_pml4_page], 0
+    jne .ready
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    xor r14d, r14d
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel user_pml4_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel user_pdpt_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel user_pd_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel user_code_pt_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel user_stack_pt_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel user_code_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel user_stack_page], rax
+
+    mov rdi, [rel user_pml4_page]
+    call vm_zero_page64
+    mov rdi, [rel user_pdpt_page]
+    call vm_zero_page64
+    mov rdi, [rel user_pd_page]
+    call vm_zero_page64
+    mov rdi, [rel user_code_pt_page]
+    call vm_zero_page64
+    mov rdi, [rel user_stack_pt_page]
+    call vm_zero_page64
+    mov rdi, [rel user_code_page]
+    call vm_zero_page64
+    mov rdi, [rel user_stack_page]
+    call vm_zero_page64
+
+    ; Copy the kernel's existing identity-map hierarchy.
+    mov rsi, PML4_ADDR
+    mov rdi, [rel user_pml4_page]
+    mov ecx, 512
+    rep movsq
+    mov rsi, PDPT_ADDR
+    mov rdi, [rel user_pdpt_page]
+    mov ecx, 512
+    rep movsq
+    mov rsi, PD_ADDR
+    mov rdi, [rel user_pd_page]
+    mov ecx, 512
+    rep movsq
+
+    mov rax, [rel user_pdpt_page]
+    or rax, 7
+    mov rdx, [rel user_pml4_page]
+    mov [rdx], rax
+    mov rax, [rel user_pd_page]
+    or rax, 7
+    mov rdx, [rel user_pdpt_page]
+    mov [rdx], rax
+
+    ; Replace the 2 MiB huge-page entries covering 4-6 MiB and 6-8 MiB
+    ; with page tables so user permissions apply only to individual pages.
+    mov rax, [rel user_code_pt_page]
+    or rax, 7
+    mov rdx, [rel user_pd_page]
+    mov [rdx + 2*8], rax
+    mov rax, [rel user_stack_pt_page]
+    or rax, 7
+    mov [rdx + 3*8], rax
+
+    mov rdi, [rel user_code_pt_page]
+    mov rdx, USER_CODE_VIRT
+    xor ecx, ecx
+.code_pt_loop:
+    mov rax, rdx
+    or rax, 3
+    mov [rdi + rcx*8], rax
+    add rdx, 0x1000
+    inc ecx
+    cmp ecx, 512
+    jb .code_pt_loop
+    mov rax, [rel user_code_page]
+    or rax, 5                    ; present + user, read-only code page
+    mov rdi, [rel user_code_pt_page]
+    mov [rdi], rax
+
+    mov rdi, [rel user_stack_pt_page]
+    mov rdx, USER_STACK_VIRT
+    xor ecx, ecx
+.stack_pt_loop:
+    mov rax, rdx
+    or rax, 3
+    mov [rdi + rcx*8], rax
+    add rdx, 0x1000
+    inc ecx
+    cmp ecx, 512
+    jb .stack_pt_loop
+    mov rax, [rel user_stack_page]
+    or rax, 7                    ; present + writable + user stack page
+    mov rdi, [rel user_stack_pt_page]
+    mov [rdi], rax
+
+    mov r14d, 1
+    jmp .done
+.fail:
+    xor r14d, r14d
+.done:
+    mov eax, r14d
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+.ready:
+    mov eax, 1
+    ret
+
+vm_zero_page64:
+    push rcx
+    push rdi
+    xor eax, eax
+    mov ecx, 512
+    rep stosq
+    pop rdi
+    pop rcx
+    ret
+
+; EDI selects 0=normal user program, 1=deliberate user-only protection fault.
+user_test_run64:
+    push rbp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12d, edi
+    call user_vm_init64
+    test eax, eax
+    jz .setup_failed
+    mov rdi, [rel user_code_page]
+    test r12d, r12d
+    jnz .copy_fault_program
+    lea rsi, [rel user_program_start]
+    mov ecx, user_program_end - user_program_start
+    jmp .copy_program
+.copy_fault_program:
+    lea rsi, [rel user_fault_program_start]
+    mov ecx, user_fault_program_end - user_fault_program_start
+.copy_program:
+    rep movsb
+    mov [rel user_return_rsp], rsp
+    mov rax, [rel user_pml4_page]
+    mov cr3, rax
+    push qword USER_DATA_SEL
+    push qword USER_STACK_TOP
+    push qword 0x202
+    push qword USER_CODE_SEL
+    push qword USER_CODE_VIRT
+    iretq
+.setup_failed:
+    mov rsi, message_uservm_failed
+    call print_string64
+    mov al, 10
+    call put_char64
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+
+; Syscall ABI: RAX=1 writes (RDI=user pointer, RSI=length); RAX=2 exits.
+; Invalid syscall arguments terminate the process instead of returning to user.
+syscall80_handler64:
+    cmp eax, 1
+    je .write
+    cmp eax, 2
+    je .exit
+    jmp user_bad_syscall_exit64
+.write:
+    cmp rdi, USER_CODE_VIRT
+    jb user_bad_syscall_exit64
+    cmp rsi, 1024
+    ja user_bad_syscall_exit64
+    mov rax, rdi
+    add rax, rsi
+    jc user_bad_syscall_exit64
+    cmp rax, USER_CODE_VIRT + 4096
+    ja user_bad_syscall_exit64
+    push rax
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+.write_loop:
+    test rsi, rsi
+    jz .write_done
+    mov al, [rdi]
+    call put_char64
+    inc rdi
+    dec rsi
+    jmp .write_loop
+.write_done:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
+.exit:
+    mov rsi, message_user_exit
+    call print_string64
+    mov al, 10
+    call put_char64
+    mov rax, PML4_ADDR
+    mov cr3, rax
+    mov rsp, [rel user_return_rsp]
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+
+user_bad_syscall_exit64:
+    mov rsi, message_user_bad_syscall
+    call print_string64
+    mov al, 10
+    call put_char64
+    mov rax, PML4_ADDR
+    mov cr3, rax
+    mov rsp, [rel user_return_rsp]
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+
+user_fault_exit64:
+    mov rsi, message_user_fault
+    call print_string64
+    mov al, 10
+    call put_char64
+    mov rax, PML4_ADDR
+    mov cr3, rax
+    mov rsp, [rel user_return_rsp]
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+
 ; Minimal timer-preemptive round-robin scheduler. Task 0 is the existing
 ; kernel shell context. Tasks 1 and 2 are independent workers that validate
 ; PIT-driven context switching. Their stacks use reserved, unused low memory.
@@ -1293,6 +1655,18 @@ init_idt64:
     add rsi, 8
     add rdi, 16
     loop .next_gate
+    ; Vector 0x80 is callable from ring 3 (DPL=3 interrupt gate).
+    lea rdi, [rel idt64 + 128*16]
+    mov rax, syscall80_handler64
+    mov [rdi], ax
+    mov word [rdi + 2], CODE64_SEL
+    mov byte [rdi + 4], 0
+    mov byte [rdi + 5], 0xEE
+    shr rax, 16
+    mov [rdi + 6], ax
+    shr rax, 16
+    mov [rdi + 8], eax
+    mov dword [rdi + 12], 0
     lidt [rel idtr64]
     ret
 
@@ -1427,6 +1801,11 @@ irq1_handler64:
     iretq
 
 exception_common64:
+    ; Ring-3 faults terminate only the current test process. The kernel shell
+    ; and worker tasks remain alive; ring-0 faults retain the fatal diagnostic.
+    mov rax, [rsp + 24]
+    test al, 3
+    jnz user_fault_exit64
     ; Stubs normalize the stack to [vector, error code, saved RIP, ...].
     mov ebx, [rsp]
     push rax
@@ -1519,7 +1898,7 @@ isr_table64:
 
 align 16
 idt64:
-    times 34 * 16 db 0
+    times 129 * 16 db 0
 idt64_end:
 
 idtr64:
@@ -1540,6 +1919,31 @@ marker_c db 'C', 0
 marker_j db 'J', 0
 marker_p db 'P', 0
 BITS 64
+user_program_start:
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_program_message - user_program_start)
+    mov esi, user_program_message_end - user_program_message
+    int 0x80
+    mov eax, 2
+    int 0x80
+    jmp $
+user_program_message db 'NOVA ring-3 program: syscall write works', 10
+user_program_message_end:
+user_program_end:
+
+user_fault_program_start:
+    mov rax, 0x500000
+    mov byte [rax], 0
+    mov eax, 2
+    int 0x80
+    jmp $
+user_fault_program_end:
+
+align 8
+tss64:
+    times 104 db 0
+tss64_end:
+
 banner64 db 'NOVA OS - 64-bit kernel online', 0
 prompt64 db 'nova> ', 0
 command_help db 'help', 0
@@ -1555,7 +1959,9 @@ command_hfree db 'hfree', 0
 command_uptime db 'uptime', 0
 command_pmmtest db 'pmmtest', 0
 command_schedtest db 'schedtest', 0
-message_help db 'Commands: help, about, clear, memory, alloc, free, pmmtest, schedtest, heap, halloc, hfree, uptime, reboot', 0
+command_usertest db 'usertest', 0
+command_userfaulttest db 'userfaulttest', 0
+message_help db 'Commands: help, about, clear, memory, alloc, free, pmmtest, schedtest, usertest, userfaulttest, heap, halloc, hfree, uptime, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
 message_memory db 'Firmware E820 entries: 0x', 0
@@ -1570,6 +1976,10 @@ message_pmmtest_pass db 'PMM safety test passed: reserved and double frees rejec
 message_pmmtest_fail db 'PMM safety test FAILED.', 0
 message_schedtest_pass db 'Scheduler test passed: both preempted tasks made progress.', 0
 message_schedtest_fail db 'Scheduler test FAILED: a worker task did not run.', 0
+message_uservm_failed db 'User VM setup failed: no physical pages available.', 0
+message_user_exit db 'Ring-3 program exited through syscall.', 0
+message_user_fault db 'User process faulted; terminated safely.', 0
+message_user_bad_syscall db 'User process made an invalid syscall; terminated.', 0
 message_heap_status db 'Heap pages allocated: 0x', 0
 message_heap_allocated db 'Heap allocation at: 0x', 0
 message_heap_already db 'A heap test allocation already exists; use hfree first.', 0
@@ -1591,6 +2001,14 @@ align 4
 timer_ticks dd 0
 free_page_count dd 0
 test_alloc_page dq 0
+user_pml4_page dq 0
+user_pdpt_page dq 0
+user_pd_page dq 0
+user_code_pt_page dq 0
+user_stack_pt_page dq 0
+user_code_page dq 0
+user_stack_page dq 0
+user_return_rsp dq 0
 current_task_index db 0
 task_started times 3 db 0
 align 8
