@@ -201,14 +201,21 @@ def main() -> int:
                 run_command(("c", "a", "t", "ret"), cat_pattern,
                             "text file remains available beside ELF", previous_count=cat_count)
                 elf_output_pattern = re.escape(b"NOVA ELF64 program loaded from disk")
+                exit_pattern = re.escape(b"Ring-3 program exited through syscall.")
+                previous_file_reads = len(re.findall(re.escape(b"hello from nova"), output()))
+                previous_exits = len(re.findall(exit_pattern, output()))
                 run_command(("e", "x", "e", "c", "ret"), elf_output_pattern,
                             "ELF64 load and ring-3 execution", timeout=8)
-                deadline = time.monotonic() + 3
-                while time.monotonic() < deadline and b"hello from nova" not in output():
+                deadline = time.monotonic() + 6
+                while time.monotonic() < deadline:
+                    file_reads = len(re.findall(re.escape(b"hello from nova"), output()))
+                    exits = len(re.findall(exit_pattern, output()))
+                    if file_reads > previous_file_reads and exits > previous_exits:
+                        break
                     time.sleep(0.1)
-                if b"hello from nova" not in output():
-                    raise RuntimeError("ELF program could not read NOVA.TXT through syscall 4")
-                print("ELF64 loader, ring-3 execution, and file-read syscall passed.")
+                else:
+                    raise RuntimeError("scheduled ELF process did not read NOVA.TXT and exit")
+                print("ELF64 loader, independent task scheduling, and file-read syscall passed.")
 
                 old_banner_count = len(re.findall(banner_pattern, output()))
                 reboot_pattern = re.escape(b"Rebooting NOVA OS...")
@@ -221,8 +228,19 @@ def main() -> int:
                     time.sleep(0.1)
                 else:
                     raise RuntimeError("VM did not reboot before persisted ELF execution test")
+                previous_file_reads = len(re.findall(re.escape(b"hello from nova"), output()))
+                previous_exits = len(re.findall(exit_pattern, output()))
                 run_command(("e", "x", "e", "c", "ret"), elf_output_pattern,
                             "ELF execution after reboot", previous_count=1, timeout=8)
+                deadline = time.monotonic() + 6
+                while time.monotonic() < deadline:
+                    file_reads = len(re.findall(re.escape(b"hello from nova"), output()))
+                    exits = len(re.findall(exit_pattern, output()))
+                    if file_reads > previous_file_reads and exits > previous_exits:
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise RuntimeError("persisted ELF process did not read its file and exit")
                 print("ELF executable survived reboot and ran again.")
 
             page_alloc_pattern = rb"Allocated physical page: 0x[0-9A-F]{8,16}"
