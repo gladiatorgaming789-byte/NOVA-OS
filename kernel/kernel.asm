@@ -2105,17 +2105,30 @@ syscall80_handler64:
     je .write
     cmp eax, 2
     je .exit
+    cmp eax, 4
+    je .file_read
     jmp user_bad_syscall_exit64
 .write:
-    cmp rdi, USER_CODE_VIRT
-    jb user_bad_syscall_exit64
     cmp rsi, 1024
     ja user_bad_syscall_exit64
     mov rax, rdi
     add rax, rsi
     jc user_bad_syscall_exit64
+    cmp rdi, USER_CODE_VIRT
+    jb .write_stack_range
+    cmp rdi, USER_CODE_VIRT + 4096
+    jae .write_stack_range
     cmp rax, USER_CODE_VIRT + 4096
     ja user_bad_syscall_exit64
+    jmp .write_valid
+.write_stack_range:
+    cmp rdi, USER_STACK_VIRT
+    jb user_bad_syscall_exit64
+    cmp rdi, USER_STACK_VIRT + 4096
+    jae user_bad_syscall_exit64
+    cmp rax, USER_STACK_VIRT + 4096
+    ja user_bad_syscall_exit64
+.write_valid:
     push rax
     push rcx
     push rdx
@@ -2156,6 +2169,74 @@ syscall80_handler64:
     pop rcx
     pop rax
     iretq
+; RAX=4 reads NOVA.TXT into a validated writable user-stack buffer.
+; RDI=destination, RSI=capacity (<=121); returns bytes copied in EAX.
+.file_read:
+    cmp rdi, USER_STACK_VIRT
+    jb user_bad_syscall_exit64
+    cmp rsi, 121
+    ja user_bad_syscall_exit64
+    mov rax, rdi
+    add rax, rsi
+    jc user_bad_syscall_exit64
+    cmp rax, USER_STACK_VIRT + 4096
+    ja user_bad_syscall_exit64
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r13, rdi
+    mov r14, rsi
+    call fs_read_header64
+    test eax, eax
+    jz .file_read_empty
+    mov r12d, [rel fs_sector_buffer + 8]
+    cmp r12, r14
+    jbe .file_read_length_ready
+    mov r12, r14
+.file_read_length_ready:
+    test r12, r12
+    jz .file_read_empty
+    mov eax, FS_DATA_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .file_read_empty
+    mov ecx, r12d
+    lea rsi, [rel fs_sector_buffer]
+    mov rdi, r13
+    rep movsb
+    mov eax, r12d
+    jmp .file_read_return
+.file_read_empty:
+    xor eax, eax
+.file_read_return:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    iretq
+
 .exit:
     mov rsi, message_user_exit
     call print_string64
@@ -2567,10 +2648,22 @@ user_elf_entry:
     mov rdi, USER_CODE_VIRT + (user_elf_message - user_elf_start)
     mov esi, user_elf_message_end - user_elf_message
     int 0x80
+    ; Read the persistent text file into the writable user stack, then print it.
+    mov eax, 4
+    mov rdi, USER_STACK_VIRT + 0x800
+    mov esi, 121
+    int 0x80
+    test eax, eax
+    jz .elf_exit
+    mov esi, eax
+    mov rdi, USER_STACK_VIRT + 0x800
+    mov eax, 1
+    int 0x80
+.elf_exit:
     mov eax, 2
     int 0x80
     jmp $
-user_elf_message db 'NOVA ELF64 program loaded from disk', 10
+user_elf_message db 'NOVA ELF64 program loaded from disk: ', 10
 user_elf_message_end:
 user_elf_end:
 
