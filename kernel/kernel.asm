@@ -2416,7 +2416,11 @@ user_task_terminate64:
     call print_string64
     mov al, 10
     call put_char64
+    ; Retire the saved context as well as the runnable state. A later exec
+    ; must enter from a fresh ring-3 frame, never resume a dead process.
     mov byte [rel user_process_state], 0
+    mov qword [rel task_rsp + 24], 0
+    mov byte [rel task_started + 3], 0
     mov eax, PML4_ADDR
     mov cr3, rax
     mov byte [rel current_task_index], 0
