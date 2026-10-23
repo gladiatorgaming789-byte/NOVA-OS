@@ -10,6 +10,7 @@ PD_ADDR   equ 0x92000
 VGA_TEXT_ADDR equ 0xB8000
 TASK1_STACK_TOP equ 0x88000
 TASK2_STACK_TOP equ 0x8C000
+TASK3_STACK_TOP equ 0x8A000
 TSS_STACK_TOP equ 0x8E000
 USER_CODE_VIRT equ 0x400000
 USER_STACK_VIRT equ 0x600000
@@ -1105,6 +1106,8 @@ fs_exec64:
     push r13
     push r14
     push r15
+    cmp byte [rel user_process_state], 1
+    je .already_running
     call fs_read_header64
     test eax, eax
     jz .failed
@@ -1162,15 +1165,21 @@ fs_exec64:
     mov rdi, [rel user_code_page]
     mov rcx, r14
     rep movsb
-    mov [rel user_return_rsp], rsp
-    mov rax, [rel user_pml4_page]
-    mov cr3, rax
-    push qword USER_DATA_SEL
-    push qword USER_STACK_TOP
-    push qword 0x202
-    push qword USER_CODE_SEL
-    push r13
-    iretq
+    mov [rel user_process_entry], r13
+    mov qword [rel task_rsp + 24], 0
+    mov byte [rel task_started + 3], 0
+    mov byte [rel user_process_state], 1
+    mov rsi, message_fs_exec_started
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .return
+.already_running:
+    mov rsi, message_fs_exec_running
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .return
 .invalid:
     mov rsi, message_fs_elf_invalid
     call print_string64
@@ -2266,6 +2275,8 @@ syscall80_handler64:
     iretq
 
 .exit:
+    cmp byte [rel current_task_index], 3
+    je user_task_exit64
     mov rsi, message_user_exit
     call print_string64
     mov al, 10
@@ -2283,6 +2294,8 @@ syscall80_handler64:
     ret
 
 user_bad_syscall_exit64:
+    cmp byte [rel current_task_index], 3
+    je user_task_bad_syscall_exit64
     mov rsi, message_user_bad_syscall
     call print_string64
     mov al, 10
@@ -2298,6 +2311,40 @@ user_bad_syscall_exit64:
     pop rbp
     sti                         ; exception/syscall gate cleared IF; restore shell IRQs
     ret
+
+user_task_exit64:
+    mov rsi, message_user_exit
+    jmp user_task_terminate64
+user_task_fault_exit64:
+    mov rsi, message_user_fault
+    jmp user_task_terminate64
+user_task_bad_syscall_exit64:
+    mov rsi, message_user_bad_syscall
+user_task_terminate64:
+    call print_string64
+    mov al, 10
+    call put_char64
+    mov byte [rel user_process_state], 0
+    mov eax, PML4_ADDR
+    mov cr3, rax
+    mov byte [rel current_task_index], 0
+    mov rsp, [rel task_rsp]
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
 
 user_fault_exit64:
     mov rsi, message_user_fault
@@ -2323,9 +2370,12 @@ scheduler_init64:
     mov qword [rel task_rsp], 0
     mov qword [rel task_rsp + 8], 0
     mov qword [rel task_rsp + 16], 0
+    mov qword [rel task_rsp + 24], 0
     mov byte [rel task_started], 1
     mov byte [rel task_started + 1], 0
     mov byte [rel task_started + 2], 0
+    mov byte [rel task_started + 3], 0
+    mov byte [rel user_process_state], 0
     mov byte [rel current_task_index], 0
     ret
 
@@ -2434,14 +2484,28 @@ irq0_handler64:
     mov [rdx + rax*8], rsp
 
     inc al
-    cmp al, 3
+    cmp al, 4
     jb .next_task_ready
     xor al, al
 .next_task_ready:
+    cmp al, 3
+    jne .task_runnable
+    cmp byte [rel user_process_state], 1
+    je .task_runnable
+    xor al, al
+.task_runnable:
     mov [rel current_task_index], al
     movzx eax, al
-    ; A zero saved RSP means this task has never run. Start it directly on
-    ; its dedicated stack rather than manufacturing an iret frame.
+    cmp al, 3
+    jne .kernel_cr3
+    mov rax, [rel user_pml4_page]
+    mov cr3, rax
+    jmp .cr3_ready
+.kernel_cr3:
+    mov eax, PML4_ADDR
+    mov cr3, rax
+.cr3_ready:
+    ; A zero saved RSP means this task has never run. Start it on its own stack.
     lea rdx, [rel task_rsp]
     cmp qword [rdx + rax*8], 0
     jne .resume_task
@@ -2451,6 +2515,17 @@ irq0_handler64:
     out 0x20, al
     cmp byte [rel current_task_index], 1
     je .start_task_a
+    cmp byte [rel current_task_index], 2
+    je .start_task_b
+    ; First entry to a user process uses a five-qword CPL3 iret frame.
+    mov rsp, TASK3_STACK_TOP
+    push qword USER_DATA_SEL
+    push qword USER_STACK_TOP
+    push qword 0x202
+    push qword USER_CODE_SEL
+    push qword [rel user_process_entry]
+    iretq
+.start_task_b:
     mov rsp, TASK2_STACK_TOP
     sti
     jmp scheduler_worker_b64
@@ -2510,7 +2585,11 @@ exception_common64:
     ; and worker tasks remain alive; ring-0 faults retain the fatal diagnostic.
     mov rax, [rsp + 24]
     test al, 3
-    jnz user_fault_exit64
+    jz .kernel_fault
+    cmp byte [rel current_task_index], 3
+    je user_task_fault_exit64
+    jmp user_fault_exit64
+.kernel_fault:
     ; Stubs normalize the stack to [vector, error code, saved RIP, ...].
     mov ebx, [rsp]
     push rax
@@ -2761,6 +2840,8 @@ message_fs_write_usage db 'Usage: write <text> (maximum 121 bytes).', 0
 message_fs_installed db 'Installed NOVA.ELF on persistent storage.', 0
 message_fs_elf_invalid db 'NOVA.ELF is invalid or unsupported.', 0
 message_fs_exec_failed db 'Could not load NOVA.ELF from storage.', 0
+message_fs_exec_started db 'Started NOVA.ELF as a preemptively scheduled user process.', 0
+message_fs_exec_running db 'A user process is already running.', 0
 message_heap_status db 'Heap pages allocated: 0x', 0
 message_heap_allocated db 'Heap allocation at: 0x', 0
 message_heap_already db 'A heap test allocation already exists; use hfree first.', 0
@@ -2790,10 +2871,12 @@ user_stack_pt_page dq 0
 user_code_page dq 0
 user_stack_page dq 0
 user_return_rsp dq 0
+user_process_entry dq 0
+user_process_state db 0
 current_task_index db 0
-task_started times 3 db 0
+task_started times 4 db 0
 align 8
-task_rsp times 3 dq 0
+task_rsp times 4 dq 0
 scheduler_counter_a dq 0
 scheduler_counter_b dq 0
 heap_head dq 0
