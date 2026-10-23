@@ -231,7 +231,29 @@ def main() -> int:
                 )
                 run_command(("p", "s", "ret"), ps_stopped_pattern,
                             "user process state after exit", previous_count=1)
-                print("ELF64 loader, independent task scheduling, file-read syscall, and process exit passed.")
+
+                # A stopped process must be restartable in the same boot.
+                # This catches stale saved-RSP/context bugs that a reboot hides.
+                previous_file_reads = len(re.findall(payload_pattern, output()))
+                previous_exits = len(re.findall(exit_pattern, output()))
+                previous_yields = len(re.findall(yield_pattern, output()))
+                previous_resumes = len(re.findall(resumed_pattern, output()))
+                run_command(("e", "x", "e", "c", "ret"), elf_output_pattern,
+                            "restart ELF after normal exit", previous_count=1, timeout=8)
+                deadline = time.monotonic() + 6
+                while time.monotonic() < deadline:
+                    data = output()
+                    if (len(re.findall(payload_pattern, data)) > previous_file_reads
+                            and len(re.findall(exit_pattern, data)) > previous_exits
+                            and len(re.findall(yield_pattern, data)) > previous_yields
+                            and len(re.findall(resumed_pattern, data)) > previous_resumes):
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise RuntimeError("ELF process did not restart and finish after its first exit")
+                run_command(("p", "s", "ret"), ps_stopped_pattern,
+                            "restarted process returns to stopped state", previous_count=2)
+                print("ELF loader, scheduler, file syscalls, exit, and same-boot restart passed.")
 
                 old_banner_count = len(re.findall(banner_pattern, output()))
                 reboot_pattern = re.escape(b"Rebooting NOVA OS...")
