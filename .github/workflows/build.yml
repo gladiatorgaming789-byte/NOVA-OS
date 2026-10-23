@@ -12,7 +12,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
       - name: Install NASM and QEMU
-        run: timeout 180s bash -c 'sudo apt-get update && sudo apt-get install -y nasm xorriso qemu-system-x86'
+        run: timeout 300s bash -c 'sudo apt-get update -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 && sudo apt-get install -y --no-install-recommends nasm xorriso qemu-system-x86'
       - name: Assemble boot sector and kernel image
         run: bash scripts/build.sh
       - name: Boot-test in QEMU

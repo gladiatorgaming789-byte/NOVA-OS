@@ -2,7 +2,7 @@
 
 **NOVA-OS is an experimental operating system built from scratch for x86-64 PCs and Oracle VirtualBox.** It is not a Linux distribution and does not use the Linux kernel.
 
-> **Status:** experimental command-line OS milestone in active development. The current branch has timer-preempted kernel tasks, ring-3 test programs with a syscall ABI, user-fault isolation tests, and an early single-file filesystem over a separate IDE data disk. It is still not a general-purpose OS: the shell remains in kernel mode, user programs are built-in test images rather than ELF files, and storage is intentionally minimal.
+> **Status:** experimental command-line OS milestone in active development. The current branch has timer-preempted kernel tasks, ring-3 test programs with a syscall ABI, user-fault isolation tests, and an early single-file filesystem over a separate IDE data disk. It is still not a general-purpose OS: the shell remains in kernel mode, the ELF loader supports one bounded static PT_LOAD segment, and storage is intentionally minimal.
 
 ## Project goals
 
@@ -42,11 +42,11 @@ On the `milestone/command-line-os` branch, the kernel currently provides:
 - `schedtest` to verify both timer-preempted kernel worker tasks progress.
 - `usertest` to run a built-in ring-3 program that prints through syscall 1 and exits through syscall 2.
 - `userfaulttest` to verify a user-mode protection fault terminates the test program and returns control to the shell.
-- `write <text>`, `ls`, and `cat` for the early `NOVA.TXT` file on a separate writable IDE disk. The current filesystem has one file slot and a 512-byte data sector; the shell line buffer limits a write to 121 bytes.
+- `write <text>`, `ls`, and `cat` for the early `NOVA.TXT` file on a separate writable IDE disk. `install` places a built-in ELF64 test executable on the disk and `exec` validates and loads it into ring 3. The current filesystem has one file slot and a 512-byte data sector; the shell line buffer limits a write to 121 bytes.
 
 Attach both the ISO and `nova-data.img` to VirtualBox. Keep the ISO as the boot device and attach `nova-data.img` as a writable IDE hard disk. Do not use the ISO as the writable data volume. The automated workflow is extending its tests to verify a written file survives a full guest reboot.
 
-These are integration milestones, not claims of a complete ELF/process/filesystem implementation. The next internal work is a real user-program loader/process lifecycle, stronger page-table and allocator invariants, and expanding storage beyond one file before the GUI phase.
+These are integration milestones, not claims of a complete process/filesystem implementation. The next internal work is a real process table and lifecycle, stronger page-table and allocator invariants, and expanding storage beyond one file before the GUI phase.
 
 ## Testing policy
 
