@@ -2575,7 +2575,7 @@ fs_elf_filename db 'NOVA.ELF'
 fs_sector_buffer times 512 db 0
 fs_file_size dd 0
 command_write_prefix db 'write ', 0
-message_help db 'Commands: help, about, clear, memory, alloc, free, pmmtest, schedtest, usertest, userfaulttest, heap, halloc, hfree, uptime, reboot', 0
+message_help db 'Commands: help, about, clear, memory, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, write, heap, halloc, hfree, uptime, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
 message_memory db 'Firmware E820 entries: 0x', 0
