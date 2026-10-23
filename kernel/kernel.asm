@@ -1129,7 +1129,11 @@ fs_exec64:
     jne .invalid
     cmp word [rel fs_sector_buffer + 4], 0x0102
     jne .invalid
+    cmp word [rel fs_sector_buffer + 16], 2
+    jne .invalid
     cmp word [rel fs_sector_buffer + 18], 0x003E
+    jne .invalid
+    cmp dword [rel fs_sector_buffer + 20], 1
     jne .invalid
     cmp qword [rel fs_sector_buffer + 32], 64
     jne .invalid
@@ -1138,6 +1142,8 @@ fs_exec64:
     cmp word [rel fs_sector_buffer + 54], 56
     jne .invalid
     cmp word [rel fs_sector_buffer + 56], 1
+    jne .invalid
+    cmp word [rel fs_sector_buffer + 58], 64
     jne .invalid
     cmp dword [rel fs_sector_buffer + 64], 1
     jne .invalid
@@ -1162,6 +1168,15 @@ fs_exec64:
     jb .invalid
     cmp r15, 4096
     ja .invalid
+    ; Entry point must fall inside the file-backed portion of the load segment.
+    mov rax, [rel fs_sector_buffer + 80]
+    add rax, r14
+    jc .invalid
+    cmp r13, rax
+    jae .invalid
+    ; Require the expected page alignment and a single-page segment.
+    cmp qword [rel fs_sector_buffer + 112], 0x1000
+    jne .invalid
     call user_vm_init64
     test eax, eax
     jz .failed
@@ -2150,6 +2165,8 @@ syscall80_handler64:
     je .exit
     cmp eax, 4
     je .file_read
+    cmp eax, 7
+    je .file_write
     cmp eax, 6
     je .yield
     jmp user_bad_syscall_exit64
@@ -2221,6 +2238,67 @@ syscall80_handler64:
     iretq
 ; RAX=4 reads NOVA.TXT into a validated writable user-stack buffer.
 ; RDI=destination, RSI=capacity (<=121); returns bytes copied in EAX.
+.file_write:
+    ; RDI=source, RSI=length. Copy from a validated user stack range into
+    ; kernel-owned command storage before invoking the existing disk writer.
+    cmp rdi, USER_STACK_VIRT
+    jb user_bad_syscall_exit64
+    cmp rsi, 121
+    ja user_bad_syscall_exit64
+    mov rax, rdi
+    add rax, rsi
+    jc user_bad_syscall_exit64
+    cmp rax, USER_STACK_VIRT + 4096
+    ja user_bad_syscall_exit64
+    push rax
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13, rsi
+    lea rsi, [rel command_write_prefix]
+    lea rdi, [rel line_buffer]
+    mov ecx, 6
+    rep movsb
+    mov rsi, r12
+    lea rdi, [rel line_buffer + 6]
+    mov ecx, r13d
+    rep movsb
+    mov byte [rel line_buffer + r13 + 6], 0
+    lea rdi, [rel line_buffer + 6]
+    mov [rel line_length], r13d
+    add dword [rel line_length], 6
+    call fs_write64
+    mov dword [rel line_length], 0
+    mov byte [rel line_buffer], 0
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
+
 .file_read:
     cmp rdi, USER_STACK_VIRT
     jb user_bad_syscall_exit64
@@ -2769,6 +2847,11 @@ user_elf_entry:
     mov esi, user_elf_message_end - user_elf_message
     int 0x80
     ; Read the persistent text file into the writable user stack, then print it.
+    ; Exercise the file-write syscall, then read the saved bytes back.
+    mov eax, 7
+    mov rdi, USER_STACK_VIRT + 0x800
+    mov esi, user_elf_payload_end - user_elf_payload
+    int 0x80
     mov eax, 4
     mov rdi, USER_STACK_VIRT + 0x800
     mov esi, 121
@@ -2795,6 +2878,8 @@ user_elf_entry:
     jmp $
 user_elf_message db 'NOVA ELF64 program loaded from disk: ', 10
 user_elf_message_end:
+user_elf_payload db 'user process wrote persistent data'
+user_elf_payload_end:
 user_elf_yield_message db 'NOVA ELF task yielding to scheduler', 10
 user_elf_yield_message_end:
 user_elf_resumed_message db 'NOVA ELF task resumed after yield', 10
