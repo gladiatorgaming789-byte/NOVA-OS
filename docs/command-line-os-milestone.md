@@ -17,7 +17,7 @@ This work is developed on `milestone/command-line-os`; `main` remains the known-
 
 ## Implementation status
 
-- Verified by QEMU in CI: boot image and ISO boot, exception diagnostics, timer scheduler smoke test, ring-3 syscall write/exit, and a deliberate user-mode protection fault returning to the shell.
+- Verified by QEMU in CI: boot image and ISO boot, exception diagnostics, timer scheduler smoke test, ring-3 syscall write/exit/yield, an ELF task yielding and resuming under preemption, and a deliberate user-mode protection fault returning to the shell.
 - Implemented but still under integration testing: primary-master ATA PIO and `NOVA.TXT` read/write/list commands on the separate data disk.
 - Implemented, with its dedicated end-to-end test now in the workflow: a bounded ELF64 loader for one static PT_LOAD segment and a built-in executable installed on the writable disk. The latest source still needs a successful full workflow run to confirm this test passes alongside the prior scheduler, user-fault, and persistence checks.
 - Not complete yet: a general process table and lifecycle, multiple-file/directory support, robust allocator locking, and a user-space shell.
@@ -82,7 +82,7 @@ Do not call the milestone complete until CI verifies all of the following:
 - The raw boot image and generated ISO both reach the kernel banner.
 - Kernel image-size/layout checks pass and boot failure diagnostics remain available over serial.
 - At least two tasks make progress under timer-driven preemption.
-- A ring-3 test program can print, yield, and exit through syscalls.
+- A ring-3 ELF program can print, yield voluntarily, resume after scheduling another task, read a file, and exit through syscalls.
 - An invalid user-mode memory access is contained to that process.
 - A user program can create and read a file from the writable virtual disk.
 - A file written before reboot is still readable after reboot.
