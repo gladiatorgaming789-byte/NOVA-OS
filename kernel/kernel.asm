@@ -310,9 +310,15 @@ long_mode_entry:
     int3                         ; CI-only fault injection validates the IDT.
 %endif
     call screen_clear64
+    mov al, 'I'
+    call serial_putc64
     sti
+    mov al, 'i'
+    call serial_putc64
     mov rsi, banner64
     call print_string64
+    mov al, 'M'
+    call serial_putc64
     mov al, 10
     call put_char64
     call print_prompt64
