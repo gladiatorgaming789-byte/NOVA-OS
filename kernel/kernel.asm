@@ -2275,7 +2275,8 @@ syscall80_handler64:
     lea rdi, [rel line_buffer + 6]
     mov ecx, r13d
     rep movsb
-    mov byte [rel line_buffer + r13 + 6], 0
+    lea rdx, [rel line_buffer + 6]
+    mov byte [rdx + r13], 0
     lea rdi, [rel line_buffer + 6]
     mov [rel line_length], r13d
     add dword [rel line_length], 6
@@ -2847,6 +2848,11 @@ user_elf_entry:
     mov esi, user_elf_message_end - user_elf_message
     int 0x80
     ; Read the persistent text file into the writable user stack, then print it.
+    ; Copy the constant payload into writable user memory, then save it.
+    mov rsi, USER_CODE_VIRT + (user_elf_payload - user_elf_start)
+    mov rdi, USER_STACK_VIRT + 0x800
+    mov ecx, user_elf_payload_end - user_elf_payload
+    rep movsb
     ; Exercise the file-write syscall, then read the saved bytes back.
     mov eax, 7
     mov rdi, USER_STACK_VIRT + 0x800
