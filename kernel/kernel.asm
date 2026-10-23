@@ -1200,12 +1200,11 @@ fs_cat64:
     pop rcx
     mov rsi, message_fs_read
     call print_string64
+    lea rsi, [rel fs_sector_buffer]
 .print:
     test ecx, ecx
     jz .done
-    mov al, [rsi + fs_sector_buffer - message_fs_read] ; replaced below by explicit buffer pointer
-    jmp .emit
-.emit:
+    mov al, [rsi]
     call put_char64
     inc rsi
     dec ecx
