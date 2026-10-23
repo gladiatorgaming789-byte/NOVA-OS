@@ -201,20 +201,30 @@ def main() -> int:
                 run_command(("c", "a", "t", "ret"), cat_pattern,
                             "text file remains available beside ELF", previous_count=cat_count)
                 elf_output_pattern = re.escape(b"NOVA ELF64 program loaded from disk")
+                yield_pattern = re.escape(b"NOVA ELF task yielding to scheduler")
+                resumed_pattern = re.escape(b"NOVA ELF task resumed after yield")
                 exit_pattern = re.escape(b"Ring-3 program exited through syscall.")
                 previous_file_reads = len(re.findall(re.escape(b"hello from nova"), output()))
                 previous_exits = len(re.findall(exit_pattern, output()))
+                previous_yields = len(re.findall(yield_pattern, output()))
+                previous_resumes = len(re.findall(resumed_pattern, output()))
                 run_command(("e", "x", "e", "c", "ret"), elf_output_pattern,
                             "ELF64 load and ring-3 execution", timeout=8)
                 deadline = time.monotonic() + 6
                 while time.monotonic() < deadline:
-                    file_reads = len(re.findall(re.escape(b"hello from nova"), output()))
-                    exits = len(re.findall(exit_pattern, output()))
-                    if file_reads > previous_file_reads and exits > previous_exits:
+                    data = output()
+                    file_reads = len(re.findall(re.escape(b"hello from nova"), data))
+                    exits = len(re.findall(exit_pattern, data))
+                    yields = len(re.findall(yield_pattern, data))
+                    resumes = len(re.findall(resumed_pattern, data))
+                    if (file_reads > previous_file_reads and exits > previous_exits
+                            and yields > previous_yields and resumes > previous_resumes):
                         break
                     time.sleep(0.1)
                 else:
-                    raise RuntimeError("scheduled ELF process did not read NOVA.TXT and exit")
+                    raise RuntimeError(
+                        "scheduled ELF process did not read its file, yield, resume, and exit"
+                    )
                 ps_stopped_pattern = re.escape(
                     b"Task 3: user ELF state (0=stopped, 1=runnable): 0x00000000"
                 )
@@ -235,17 +245,25 @@ def main() -> int:
                     raise RuntimeError("VM did not reboot before persisted ELF execution test")
                 previous_file_reads = len(re.findall(re.escape(b"hello from nova"), output()))
                 previous_exits = len(re.findall(exit_pattern, output()))
+                previous_yields = len(re.findall(yield_pattern, output()))
+                previous_resumes = len(re.findall(resumed_pattern, output()))
                 run_command(("e", "x", "e", "c", "ret"), elf_output_pattern,
                             "ELF execution after reboot", previous_count=1, timeout=8)
                 deadline = time.monotonic() + 6
                 while time.monotonic() < deadline:
-                    file_reads = len(re.findall(re.escape(b"hello from nova"), output()))
-                    exits = len(re.findall(exit_pattern, output()))
-                    if file_reads > previous_file_reads and exits > previous_exits:
+                    data = output()
+                    file_reads = len(re.findall(re.escape(b"hello from nova"), data))
+                    exits = len(re.findall(exit_pattern, data))
+                    yields = len(re.findall(yield_pattern, data))
+                    resumes = len(re.findall(resumed_pattern, data))
+                    if (file_reads > previous_file_reads and exits > previous_exits
+                            and yields > previous_yields and resumes > previous_resumes):
                         break
                     time.sleep(0.1)
                 else:
-                    raise RuntimeError("persisted ELF process did not read its file and exit")
+                    raise RuntimeError(
+                        "persisted ELF process did not read its file, yield, resume, and exit"
+                    )
                 print("ELF executable survived reboot and ran again.")
 
             page_alloc_pattern = rb"Allocated physical page: 0x[0-9A-F]{8,16}"
