@@ -1004,7 +1004,8 @@ fs_install64:
     jz .disk_error
     call fs_read_header64
     test eax, eax
-    jnz .ready
+    jnz .header_valid
+    ; A blank disk is initialized; unknown nonblank media is never erased.
     lea rsi, [rel fs_sector_buffer]
     mov ecx, 512
 .blank_check:
@@ -1012,27 +1013,16 @@ fs_install64:
     jne .invalid
     inc rsi
     loop .blank_check
-.ready:
+    lea rdi, [rel fs_sector_buffer]
+    xor eax, eax
+    mov ecx, 64
+    rep stosq
+    lea rsi, [rel fs_magic]
+    lea rdi, [rel fs_sector_buffer]
+    mov ecx, 7
+    rep movsb
+.header_valid:
     mov r12d, user_elf_end - user_elf_start
-    lea rdi, [rel fs_sector_buffer]
-    xor eax, eax
-    mov ecx, 64
-    rep stosq
-    lea rsi, [rel fs_magic]
-    lea rdi, [rel fs_sector_buffer]
-    mov ecx, 7
-    rep movsb
-    jmp .ready_header
-.initialize_header:
-    lea rdi, [rel fs_sector_buffer]
-    xor eax, eax
-    mov ecx, 64
-    rep stosq
-    lea rsi, [rel fs_magic]
-    lea rdi, [rel fs_sector_buffer]
-    mov ecx, 7
-    rep movsb
-.ready_header:
     mov [rel fs_sector_buffer + 28], r12d
     lea rsi, [rel fs_elf_filename]
     lea rdi, [rel fs_sector_buffer + 20]
