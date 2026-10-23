@@ -310,15 +310,9 @@ long_mode_entry:
     int3                         ; CI-only fault injection validates the IDT.
 %endif
     call screen_clear64
-    mov al, 'I'
-    call serial_putc64
     sti
-    mov al, 'i'
-    call serial_putc64
     mov rsi, banner64
     call print_string64
-    mov al, 'M'
-    call serial_putc64
     mov al, 10
     call put_char64
     call print_prompt64
@@ -1269,8 +1263,6 @@ scheduler_init64:
     ret
 
 scheduler_worker_a64:
-    mov al, 'A'
-    call serial_putc64
 .loop:
     inc qword [rel scheduler_counter_a]
     pause
@@ -1563,7 +1555,7 @@ command_hfree db 'hfree', 0
 command_uptime db 'uptime', 0
 command_pmmtest db 'pmmtest', 0
 command_schedtest db 'schedtest', 0
-message_help db 'Commands: help, about, clear, memory, alloc, free, pmmtest, heap, halloc, hfree, uptime, reboot', 0
+message_help db 'Commands: help, about, clear, memory, alloc, free, pmmtest, schedtest, heap, halloc, hfree, uptime, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
 message_memory db 'Firmware E820 entries: 0x', 0
