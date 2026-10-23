@@ -92,7 +92,7 @@ def main() -> int:
                 raise RuntimeError(f"{description} failed. Captured serial output:\n{captured}")
 
             help_pattern = re.escape(
-                b"Commands: help, about, clear, memory, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, write, heap, halloc, hfree, uptime, reboot"
+                b"Commands: help, about, clear, memory, mem, ps, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, write, heap, halloc, hfree, uptime, reboot"
             )
             run_command(("h", "e", "l", "p", "ret"), help_pattern, "shell help command")
             print("Shell help check passed.")
@@ -118,6 +118,15 @@ def main() -> int:
                 "timer-preemptive scheduler regression",
             )
             print("Timer-preemptive scheduler check passed.")
+
+            ps_pattern = rb"Task 1: worker-a iterations: 0x[0-9A-F]{8}"
+            ps_data = run_command(("p", "s", "ret"), ps_pattern,
+                                  "scheduler task inspection")
+            if b"Task 2: worker-b iterations: 0x" not in ps_data:
+                raise RuntimeError("ps did not report both scheduler worker tasks")
+            run_command(("m", "e", "m", "ret"), e820_pattern,
+                        "mem alias")
+            print("Task inspection and mem alias checks passed.")
 
             user_output_pattern = re.escape(
                 b"NOVA ring-3 program: syscall write works"
