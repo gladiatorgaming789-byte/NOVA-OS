@@ -11,10 +11,6 @@ VGA_TEXT_ADDR equ 0xB8000
 TASK1_STACK_TOP equ 0x88000
 TASK2_STACK_TOP equ 0x8C000
 TASK3_STACK_TOP equ 0x8A000
-TSS_SHELL_STACK_TOP equ 0x8E000
-TSS_ELF_STACK_TOP equ 0x8D000
-SHELL_TASK_INDEX equ 3
-USER_TASK_INDEX equ 4
 TSS_STACK_TOP equ 0x8E000
 USER_CODE_VIRT equ 0x400000
 USER_STACK_VIRT equ 0x600000
@@ -2124,18 +2120,11 @@ user_test_run64:
 .copy_program:
     rep movsb
     mov [rel user_return_rsp], rsp
-    mov byte [rel sync_user_test_active], 1
     mov rax, [rel user_pml4_page]
     mov cr3, rax
     push qword USER_DATA_SEL
     push qword USER_STACK_TOP
-    cmp byte [rel current_task_index], SHELL_TASK_INDEX
-    jne .user_test_if_enabled
-    push qword 0x2
-    jmp .user_test_flags_ready
-.user_test_if_enabled:
     push qword 0x202
-.user_test_flags_ready:
     push qword USER_CODE_SEL
     push qword USER_CODE_VIRT
     iretq
@@ -2159,16 +2148,9 @@ syscall80_handler64:
     je .write
     cmp eax, 2
     je .exit
-    cmp eax, 3
-    je .read_key
     cmp eax, 4
     je .file_read
-    cmp eax, 5
-    je .run_command
     jmp user_bad_syscall_exit64
-.read_key:
-    call poll_keyboard64
-    iretq
 .write:
     cmp rsi, 1024
     ja user_bad_syscall_exit64
@@ -2232,14 +2214,6 @@ syscall80_handler64:
     iretq
 ; RAX=4 reads NOVA.TXT into a validated writable user-stack buffer.
 ; RDI=destination, RSI=capacity (<=121); returns bytes copied in EAX.
-.shell_exit_denied:
-    mov rsi, message_shell_exit_denied
-    call print_string64
-    mov al, 10
-    call put_char64
-    xor eax, eax
-    iretq
-
 .file_read:
     cmp rdi, USER_STACK_VIRT
     jb user_bad_syscall_exit64
@@ -2307,10 +2281,8 @@ syscall80_handler64:
     iretq
 
 .exit:
-    cmp byte [rel current_task_index], USER_TASK_INDEX
+    cmp byte [rel current_task_index], 3
     je user_task_exit64
-    cmp byte [rel current_task_index], SHELL_TASK_INDEX
-    je .shell_exit_denied
     mov rsi, message_user_exit
     call print_string64
     mov al, 10
@@ -2318,24 +2290,18 @@ syscall80_handler64:
     mov rax, PML4_ADDR
     mov cr3, rax
     mov rsp, [rel user_return_rsp]
-    mov byte [rel sync_user_test_active], 0
     pop r15
     pop r14
     pop r13
     pop r12
     pop rbx
     pop rbp
-    cmp byte [rel current_task_index], SHELL_TASK_INDEX
-    je .fault_return_no_sti
-    sti                         ; exception/syscall gate cleared IF; restore kernel shell IRQs
-.fault_return_no_sti:
+    sti                         ; exception/syscall gate cleared IF; restore shell IRQs
     ret
 
 user_bad_syscall_exit64:
-    cmp byte [rel current_task_index], USER_TASK_INDEX
+    cmp byte [rel current_task_index], 3
     je user_task_bad_syscall_exit64
-    cmp byte [rel current_task_index], SHELL_TASK_INDEX
-    je .shell_bad_syscall
     mov rsi, message_user_bad_syscall
     call print_string64
     mov al, 10
@@ -2343,98 +2309,14 @@ user_bad_syscall_exit64:
     mov rax, PML4_ADDR
     mov cr3, rax
     mov rsp, [rel user_return_rsp]
-    mov byte [rel sync_user_test_active], 0
     pop r15
     pop r14
     pop r13
     pop r12
     pop rbx
     pop rbp
-    cmp byte [rel current_task_index], SHELL_TASK_INDEX
-    je .bad_return_no_sti
-    sti
-.bad_return_no_sti:
+    sti                         ; exception/syscall gate cleared IF; restore shell IRQs
     ret
-
-; RAX=5 executes a validated user-shell command string from its stack page.
-.run_command:
-    cmp byte [rel current_task_index], SHELL_TASK_INDEX
-    jne user_bad_syscall_exit64
-    cmp rdi, USER_STACK_VIRT
-    jb user_bad_syscall_exit64
-    cmp rsi, 127
-    ja user_bad_syscall_exit64
-    mov rax, rdi
-    add rax, rsi
-    jc user_bad_syscall_exit64
-    cmp rax, USER_STACK_VIRT + 4096
-    ja user_bad_syscall_exit64
-    push rcx
-    push rdx
-    push rbx
-    push rbp
-    push rsi
-    push rdi
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-    mov r12, rdi
-    mov r13, rsi
-    lea rdi, [rel line_buffer]
-    mov rsi, r12
-    mov ecx, r13d
-    rep movsb
-    mov byte [rel line_buffer + r13], 0
-    mov [rel line_length], r13d
-    call execute_command64
-    mov dword [rel line_length], 0
-    mov byte [rel line_buffer], 0
-    call print_prompt64
-    mov rax, [rel shell_pml4_page]
-    mov cr3, rax
-    xor eax, eax
-    jmp .run_command_return
-.shell_bad_syscall:
-    push rcx
-    push rdx
-    push rbx
-    push rbp
-    push rsi
-    push rdi
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-    mov rsi, message_user_bad_syscall
-    call print_string64
-    mov al, 10
-    call put_char64
-    xor eax, eax
-.run_command_return:
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rdi
-    pop rsi
-    pop rbp
-    pop rbx
-    pop rdx
-    pop rcx
-    iretq
 
 user_task_exit64:
     mov rsi, message_user_exit
@@ -2449,11 +2331,10 @@ user_task_terminate64:
     mov al, 10
     call put_char64
     mov byte [rel user_process_state], 0
-    mov rax, [rel shell_pml4_page]
+    mov eax, PML4_ADDR
     mov cr3, rax
-    mov qword [rel tss64 + 4], TSS_SHELL_STACK_TOP
-    mov byte [rel current_task_index], SHELL_TASK_INDEX
-    mov rsp, [rel task_rsp + SHELL_TASK_INDEX*8]
+    mov byte [rel current_task_index], 0
+    mov rsp, [rel task_rsp]
     pop r15
     pop r14
     pop r13
@@ -2711,12 +2592,8 @@ exception_common64:
     mov rax, [rsp + 24]
     test al, 3
     jz .kernel_fault
-    cmp byte [rel sync_user_test_active], 1
-    je user_fault_exit64
-    cmp byte [rel current_task_index], USER_TASK_INDEX
+    cmp byte [rel current_task_index], 3
     je user_task_fault_exit64
-    cmp byte [rel current_task_index], SHELL_TASK_INDEX
-    je user_shell_fault64
     jmp user_fault_exit64
 .kernel_fault:
     ; Stubs normalize the stack to [vector, error code, saved RIP, ...].
@@ -2972,8 +2849,6 @@ message_fs_elf_invalid db 'NOVA.ELF is invalid or unsupported.', 0
 message_fs_exec_failed db 'Could not load NOVA.ELF from storage.', 0
 message_fs_exec_started db 'Started NOVA.ELF as a preemptively scheduled user process.', 0
 message_fs_exec_running db 'A user process is already running.', 0
-message_shell_exit_denied db 'The interactive shell cannot exit.', 0
-message_shell_fault db 'User shell faulted; system halted for safety.', 0
 message_heap_status db 'Heap pages allocated: 0x', 0
 message_heap_allocated db 'Heap allocation at: 0x', 0
 message_heap_already db 'A heap test allocation already exists; use hfree first.', 0
@@ -3005,7 +2880,6 @@ user_stack_page dq 0
 user_return_rsp dq 0
 user_process_entry dq 0
 user_process_state db 0
-sync_user_test_active db 0
 current_task_index db 0
 task_started times 4 db 0
 align 8
