@@ -594,6 +594,11 @@ execute_command64:
     test al, al
     jnz .memory
     mov rsi, line_buffer
+    mov rdi, command_mem
+    call strings_equal64
+    test al, al
+    jnz .memory
+    mov rsi, line_buffer
     mov rdi, command_alloc
     call strings_equal64
     test al, al
@@ -628,6 +633,11 @@ execute_command64:
     call strings_equal64
     test al, al
     jnz .schedtest
+    mov rsi, line_buffer
+    mov rdi, command_ps
+    call strings_equal64
+    test al, al
+    jnz .ps
     mov rsi, line_buffer
     mov rdi, command_install
     call strings_equal64
@@ -852,6 +862,24 @@ execute_command64:
 .hfree_failed:
     mov rsi, message_heap_free_failed
     call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.ps:
+    mov rsi, message_ps_foreground
+    call print_string64
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_worker_a
+    call print_string64
+    mov eax, [rel scheduler_counter_a]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_worker_b
+    call print_string64
+    mov eax, [rel scheduler_counter_b]
+    call print_hex32
     mov al, 10
     call put_char64
     jmp .done
@@ -2679,6 +2707,8 @@ command_about db 'about', 0
 command_clear db 'clear', 0
 command_reboot db 'reboot', 0
 command_memory db 'memory', 0
+command_mem db 'mem', 0
+command_ps db 'ps', 0
 command_alloc db 'alloc', 0
 command_free db 'free', 0
 command_heap db 'heap', 0
@@ -2699,7 +2729,7 @@ fs_elf_filename db 'NOVA.ELF'
 fs_sector_buffer times 512 db 0
 fs_file_size dd 0
 command_write_prefix db 'write ', 0
-message_help db 'Commands: help, about, clear, memory, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, write, heap, halloc, hfree, uptime, reboot', 0
+message_help db 'Commands: help, about, clear, memory, mem, ps, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, write, heap, halloc, hfree, uptime, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
 message_memory db 'Firmware E820 entries: 0x', 0
@@ -2714,6 +2744,9 @@ message_pmmtest_pass db 'PMM safety test passed: reserved and double frees rejec
 message_pmmtest_fail db 'PMM safety test FAILED.', 0
 message_schedtest_pass db 'Scheduler test passed: both preempted tasks made progress.', 0
 message_schedtest_fail db 'Scheduler test FAILED: a worker task did not run.', 0
+message_ps_foreground db 'Task 0: foreground shell / user-program context', 0
+message_ps_worker_a db 'Task 1: worker-a iterations: 0x', 0
+message_ps_worker_b db 'Task 2: worker-b iterations: 0x', 0
 message_uservm_failed db 'User VM setup failed: no physical pages available.', 0
 message_user_exit db 'Ring-3 program exited through syscall.', 0
 message_user_fault db 'User process faulted; terminated safely.', 0
