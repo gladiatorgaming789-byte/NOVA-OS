@@ -1403,8 +1403,6 @@ irq0_handler64:
     movzx eax, al
     lea rdx, [rel task_rsp]
     mov rsp, [rdx + rax*8]
-    mov al, '2'
-    call serial_putc64
 
     mov al, 0x20
     out 0x20, al
