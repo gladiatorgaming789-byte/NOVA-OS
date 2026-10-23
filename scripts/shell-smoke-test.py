@@ -38,7 +38,6 @@ def main() -> int:
             "-display", "none",
             "-serial", f"file:{serial_path}",
             "-monitor", f"unix:{monitor_path},server=on,wait=off",
-            "-no-reboot",
             "-no-shutdown",
         ]
 
