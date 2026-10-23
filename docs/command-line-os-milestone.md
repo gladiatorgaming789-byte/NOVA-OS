@@ -19,8 +19,8 @@ This work is developed on `milestone/command-line-os`; `main` remains the known-
 
 - Verified by QEMU in CI: boot image and ISO boot, exception diagnostics, timer scheduler smoke test, ring-3 syscall write/exit/yield, an ELF task yielding and resuming under preemption, and a deliberate user-mode protection fault returning to the shell.
 - Implemented but still under integration testing: primary-master ATA PIO and `NOVA.TXT` read/write/list commands on the separate data disk.
-- Implemented, with its dedicated end-to-end test now in the workflow: a bounded ELF64 loader for one static PT_LOAD segment and a built-in executable installed on the writable disk. The latest source still needs a successful full workflow run to confirm this test passes alongside the prior scheduler, user-fault, and persistence checks.
-- Not complete yet: a general process table and lifecycle, multiple-file/directory support, robust allocator locking, and a user-space shell.
+- Implemented and verified in the latest successful full workflow: a bounded ELF64 loader for one static PT_LOAD segment, a built-in executable installed on the writable disk, and ring-3 syscalls for bounded file reads and writes. The test executable now writes file contents, reads them back, yields/resumes under scheduling, exits, and the updated file is verified after a full guest reboot.
+- Not complete yet: a general process table and lifecycle, multiple-file/directory support, robust allocator locking, and moving the interactive shell into ring 3. The current shell remains kernel-mode, so this is not yet the complete pre-GUI milestone.
 
 ## Target architecture
 
