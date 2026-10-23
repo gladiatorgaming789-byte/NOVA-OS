@@ -2495,8 +2495,8 @@ irq0_handler64:
     xor al, al
 .task_runnable:
     mov [rel current_task_index], al
-    movzx eax, al
-    cmp al, 3
+    movzx r10d, al               ; preserve selected task index across CR3 load
+    cmp r10d, 3
     jne .kernel_cr3
     mov rax, [rel user_pml4_page]
     mov cr3, rax
@@ -2507,10 +2507,10 @@ irq0_handler64:
 .cr3_ready:
     ; A zero saved RSP means this task has never run. Start it on its own stack.
     lea rdx, [rel task_rsp]
-    cmp qword [rdx + rax*8], 0
+    cmp qword [rdx + r10*8], 0
     jne .resume_task
     lea rdx, [rel task_started]
-    mov byte [rdx + rax], 1
+    mov byte [rdx + r10], 1
     mov al, 0x20
     out 0x20, al
     cmp byte [rel current_task_index], 1
@@ -2536,7 +2536,7 @@ irq0_handler64:
 
 .resume_task:
     lea rdx, [rel task_rsp]
-    mov rsp, [rdx + rax*8]
+    mov rsp, [rdx + r10*8]
     mov al, 0x20
     out 0x20, al
     pop r15
