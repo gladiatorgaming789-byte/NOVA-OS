@@ -628,6 +628,16 @@ execute_command64:
     test al, al
     jnz .schedtest
     mov rsi, line_buffer
+    mov rdi, command_install
+    call strings_equal64
+    test al, al
+    jnz .fs_install
+    mov rsi, line_buffer
+    mov rdi, command_exec
+    call strings_equal64
+    test al, al
+    jnz .fs_exec
+    mov rsi, line_buffer
     mov rdi, command_ls
     call strings_equal64
     test al, al
@@ -860,6 +870,12 @@ execute_command64:
     mov al, 10
     call put_char64
     jmp .done
+.fs_install:
+    call fs_install64
+    jmp .done
+.fs_exec:
+    call fs_exec64
+    jmp .done
 .fs_ls:
     call fs_list64
     jmp .done
@@ -973,6 +989,177 @@ strings_equal64:
     ret
 
 
+
+; Install a small statically-linked ELF64 test executable into the single
+; NOVA filesystem slot. Unknown nonblank media is rejected rather than erased.
+fs_install64:
+    push rbx
+    push r12
+    push r13
+    mov eax, FS_SUPER_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .disk_error
+    call fs_read_header64
+    test eax, eax
+    jnz .ready
+    lea rsi, [rel fs_sector_buffer]
+    mov ecx, 512
+.blank_check:
+    cmp byte [rsi], 0
+    jne .invalid
+    inc rsi
+    loop .blank_check
+.ready:
+    mov r12d, user_elf_end - user_elf_start
+    lea rdi, [rel fs_sector_buffer]
+    xor eax, eax
+    mov ecx, 64
+    rep stosq
+    lea rsi, [rel fs_magic]
+    lea rdi, [rel fs_sector_buffer]
+    mov ecx, 7
+    rep movsb
+    mov [rel fs_sector_buffer + 8], r12d
+    lea rsi, [rel fs_elf_filename]
+    lea rdi, [rel fs_sector_buffer + 12]
+    mov ecx, 8
+    rep movsb
+    mov eax, FS_SUPER_LBA
+    lea rsi, [rel fs_sector_buffer]
+    call ata_write_sector64
+    test eax, eax
+    jz .disk_error
+    lea rdi, [rel fs_sector_buffer]
+    xor eax, eax
+    mov ecx, 64
+    rep stosq
+    lea rsi, [rel user_elf_start]
+    lea rdi, [rel fs_sector_buffer]
+    mov ecx, r12d
+    rep movsb
+    mov eax, FS_DATA_LBA
+    lea rsi, [rel fs_sector_buffer]
+    call ata_write_sector64
+    test eax, eax
+    jz .disk_error
+    mov rsi, message_fs_installed
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.invalid:
+    mov rsi, message_fs_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.disk_error:
+    mov rsi, message_fs_no_disk
+    call print_string64
+    mov al, 10
+    call put_char64
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Load a bounded, single-PT_LOAD ELF64 executable from the data sector.
+; Only fixed virtual address 0x400000 is supported in this first loader.
+fs_exec64:
+    push rbp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    call fs_read_header64
+    test eax, eax
+    jz .failed
+    mov r12d, [rel fs_sector_buffer + 8]
+    cmp r12d, 120
+    jb .invalid
+    mov eax, FS_DATA_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .failed
+    cmp dword [rel fs_sector_buffer], 0x464C457F
+    jne .invalid
+    cmp word [rel fs_sector_buffer + 4], 0x0102
+    jne .invalid
+    cmp word [rel fs_sector_buffer + 18], 0x003E
+    jne .invalid
+    cmp qword [rel fs_sector_buffer + 32], 64
+    jne .invalid
+    cmp word [rel fs_sector_buffer + 52], 64
+    jne .invalid
+    cmp word [rel fs_sector_buffer + 54], 56
+    jne .invalid
+    cmp word [rel fs_sector_buffer + 56], 1
+    jne .invalid
+    cmp dword [rel fs_sector_buffer + 64], 1
+    jne .invalid
+    cmp dword [rel fs_sector_buffer + 68], 5
+    jne .invalid
+    cmp qword [rel fs_sector_buffer + 72], 0
+    jne .invalid
+    cmp qword [rel fs_sector_buffer + 80], USER_CODE_VIRT
+    jne .invalid
+    mov r13, [rel fs_sector_buffer + 24]
+    cmp r13, USER_CODE_VIRT + 120
+    jb .invalid
+    cmp r13, USER_CODE_VIRT + 4096
+    jae .invalid
+    mov r14, [rel fs_sector_buffer + 96]
+    cmp r14, r12
+    ja .invalid
+    cmp r14, 4096
+    ja .invalid
+    mov r15, [rel fs_sector_buffer + 104]
+    cmp r15, r14
+    jb .invalid
+    cmp r15, 4096
+    ja .invalid
+    call user_vm_init64
+    test eax, eax
+    jz .failed
+    mov rdi, [rel user_code_page]
+    call vm_zero_page64
+    lea rsi, [rel fs_sector_buffer]
+    mov rdi, [rel user_code_page]
+    mov rcx, r14
+    rep movsb
+    mov [rel user_return_rsp], rsp
+    mov rax, [rel user_pml4_page]
+    mov cr3, rax
+    push qword USER_DATA_SEL
+    push qword USER_STACK_TOP
+    push qword 0x202
+    push qword USER_CODE_SEL
+    push r13
+    iretq
+.invalid:
+    mov rsi, message_fs_elf_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .return
+.failed:
+    mov rsi, message_fs_exec_failed
+    call print_string64
+    mov al, 10
+    call put_char64
+.return:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
 
 ; ATA primary-master PIO sector access (LBA28), for a separate writable IDE disk.
 ; EAX=LBA, RDI=buffer for read; EAX=LBA, RSI=buffer for write. EAX=1 success.
@@ -1170,6 +1357,8 @@ fs_list64:
     call fs_read_header64
     test eax, eax
     jz .invalid
+    lea rsi, [rel fs_sector_buffer + 12]
+    call print_string64
     mov rsi, message_fs_list
     call print_string64
     mov eax, [rel fs_sector_buffer + 8]
@@ -2315,6 +2504,45 @@ user_fault_program_start:
     jmp $
 user_fault_program_end:
 
+; A minimal static ELF64 executable: one RX PT_LOAD segment at 0x400000.
+; It uses syscall 1 for console output and syscall 2 to exit to the shell.
+align 8
+user_elf_start:
+    db 0x7F, 'E', 'L', 'F', 2, 1, 1, 0
+    times 8 db 0
+    dw 2
+    dw 0x3E
+    dd 1
+    dq USER_CODE_VIRT + (user_elf_entry - user_elf_start)
+    dq 64
+    dq 0
+    dd 0
+    dw 64
+    dw 56
+    dw 1
+    dw 64
+    dw 0
+    dw 0
+    dd 1
+    dd 5
+    dq 0
+    dq USER_CODE_VIRT
+    dq USER_CODE_VIRT
+    dq user_elf_end - user_elf_start
+    dq user_elf_end - user_elf_start
+    dq 0x1000
+user_elf_entry:
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_elf_message - user_elf_start)
+    mov esi, user_elf_message_end - user_elf_message
+    int 0x80
+    mov eax, 2
+    int 0x80
+    jmp $
+user_elf_message db 'NOVA ELF64 program loaded from disk', 10
+user_elf_message_end:
+user_elf_end:
+
 align 8
 tss64:
     times 104 db 0
@@ -2337,10 +2565,13 @@ command_pmmtest db 'pmmtest', 0
 command_schedtest db 'schedtest', 0
 command_usertest db 'usertest', 0
 command_userfaulttest db 'userfaulttest', 0
+command_install db 'install', 0
+command_exec db 'exec', 0
 command_ls db 'ls', 0
 command_cat db 'cat', 0
 fs_magic db 'NOVAFS1'
 fs_filename db 'NOVA.TXT'
+fs_elf_filename db 'NOVA.ELF'
 fs_sector_buffer times 512 db 0
 fs_file_size dd 0
 command_write_prefix db 'write ', 0
@@ -2367,9 +2598,13 @@ message_fs_no_disk db 'Storage unavailable: attach a writable IDE data disk.', 0
 message_fs_invalid db 'Storage is unformatted or has an invalid NOVA filesystem header.', 0
 message_fs_empty db 'NOVA.TXT is empty or does not exist.', 0
 message_fs_written db 'Saved NOVA.TXT to persistent storage.', 0
+message_fs_list db ' bytes: 0x', 0
+message_fs_read db 'File: ', 0
+message_fs_write_usage db 'Usage: write <text> (maximum 121 bytes).', 0
+message_fs_installed db 'Installed NOVA.ELF on persistent storage.', 0
+message_fs_elf_invalid db 'NOVA.ELF is invalid or unsupported.', 0
+message_fs_exec_failed db 'Could not load NOVA.ELF from storage.', 0
 message_fs_list db 'NOVA.TXT bytes: 0x', 0
-message_fs_read db 'NOVA.TXT: ', 0
-message_fs_write_usage db 'Usage: write <text> (maximum 500 bytes).', 0
 message_heap_status db 'Heap pages allocated: 0x', 0
 message_heap_allocated db 'Heap allocation at: 0x', 0
 message_heap_already db 'A heap test allocation already exists; use hfree first.', 0
