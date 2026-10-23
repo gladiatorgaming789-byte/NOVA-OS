@@ -184,8 +184,13 @@ def main() -> int:
                 run_command(("i", "n", "s", "t", "a", "l", "l", "ret"),
                             install_pattern, "ELF install to filesystem", timeout=8)
                 elf_listing_pattern = rb"NOVA\.ELF bytes: 0x[0-9A-F]{8}"
-                run_command(("l", "s", "ret"), elf_listing_pattern,
-                            "ELF file listing")
+                listing_data = run_command(("l", "s", "ret"), elf_listing_pattern,
+                                           "ELF file listing")
+                if b"NOVA.TXT bytes: 0x" not in listing_data:
+                    raise RuntimeError("installing NOVA.ELF unexpectedly removed NOVA.TXT")
+                cat_count = len(re.findall(cat_pattern, output()))
+                run_command(("c", "a", "t", "ret"), cat_pattern,
+                            "text file remains available beside ELF", previous_count=cat_count)
                 elf_output_pattern = re.escape(b"NOVA ELF64 program loaded from disk")
                 run_command(("e", "x", "e", "c", "ret"), elf_output_pattern,
                             "ELF64 load and ring-3 execution", timeout=8)
