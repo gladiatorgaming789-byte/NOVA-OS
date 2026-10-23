@@ -160,7 +160,7 @@ def main() -> int:
 
                 ls_pattern = rb"NOVA\.TXT bytes: 0x[0-9A-F]{8}"
                 run_command(("l", "s", "ret"), ls_pattern, "filesystem directory listing")
-                cat_pattern = re.escape(b"NOVA.TXT: hello from nova")
+                cat_pattern = re.escape(b"File: hello from nova")
                 run_command(("c", "a", "t", "ret"), cat_pattern, "filesystem file read")
                 print("Filesystem ls/cat checks passed.")
 
