@@ -2,7 +2,7 @@
 
 **NOVA-OS is an experimental operating system built from scratch for x86-64 PCs and Oracle VirtualBox.** It is not a Linux distribution and does not use the Linux kernel.
 
-> **Status:** early x86-64 kernel prototype with an interrupt-driven keyboard queue, PIT timer, BIOS E820 memory discovery, a bitmap physical-page allocator, a page-backed kernel heap, and a tiny interactive shell. It is not a complete operating system yet.
+> **Status:** experimental command-line OS milestone in active development. The current branch has timer-preempted kernel tasks, ring-3 test programs with a syscall ABI, user-fault isolation tests, and an early single-file filesystem over a separate IDE data disk. It is still not a general-purpose OS: the shell remains in kernel mode, user programs are built-in test images rather than ELF files, and storage is intentionally minimal.
 
 ## Project goals
 
@@ -32,7 +32,21 @@ The markers alone do not prove that every transition worked. The current source 
 
 ## Build
 
-Builds use NASM and xorriso in GitHub Actions. Each successful workflow run publishes a `nova-os-boot-tested-image` artifact containing the rebuilt `build/nova-os.iso`, raw floppy image, checksums, and serial logs. **Use `build/nova-os.iso` from the downloaded artifact ZIP** in VirtualBox; the root-level `nova-os.iso` is retained for comparison and may be an older image. Configure the VM for BIOS boot (EFI off).
+Builds use NASM and xorriso in GitHub Actions. Each successful workflow run publishes a `nova-os-boot-tested-image` artifact containing `build/nova-os.iso`, the raw boot image, a separate writable `build/nova-data.img`, checksums, and serial logs. **Use `build/nova-os.iso` from the downloaded artifact ZIP** in VirtualBox; the root-level `nova-os.iso` is retained for comparison and may be an older image. Configure the VM for BIOS boot (EFI off).
+
+## Current command-line milestone
+
+On the `milestone/command-line-os` branch, the kernel currently provides:
+
+- `help`, `memory`, `alloc`, `free`, `pmmtest`, `heap`, `halloc`, `hfree`, and `uptime` diagnostics.
+- `schedtest` to verify both timer-preempted kernel worker tasks progress.
+- `usertest` to run a built-in ring-3 program that prints through syscall 1 and exits through syscall 2.
+- `userfaulttest` to verify a user-mode protection fault terminates the test program and returns control to the shell.
+- `write <text>`, `ls`, and `cat` for the early `NOVA.TXT` file on a separate writable IDE disk. The current filesystem has one file slot and a 512-byte data sector; the shell line buffer limits a write to 121 bytes.
+
+Attach both the ISO and `nova-data.img` to VirtualBox. Keep the ISO as the boot device and attach `nova-data.img` as a writable IDE hard disk. Do not use the ISO as the writable data volume. The automated workflow is extending its tests to verify a written file survives a full guest reboot.
+
+These are integration milestones, not claims of a complete ELF/process/filesystem implementation. The next internal work is a real user-program loader/process lifecycle, stronger page-table and allocator invariants, and expanding storage beyond one file before the GUI phase.
 
 ## Testing policy
 

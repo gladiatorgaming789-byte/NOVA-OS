@@ -8,11 +8,18 @@ This work is developed on `milestone/command-line-os`; `main` remains the known-
 
 ## Current constraints that must be addressed first
 
-- The boot sector currently loads only 16 kernel sectors (8 KiB) at physical 0x1000. That size cap is incompatible with a scheduler, user-mode runtime, drivers, and filesystem.
-- The kernel identity-maps the first 1 GiB with 2 MiB pages and uses fixed physical addresses for page tables, stack, and allocator bitmaps. This is not yet per-process virtual memory or protection.
-- The shell runs in the kernel and the exception path halts the machine. There is no context-switch frame, ring-3 transition, syscall ABI, or process model.
-- The current bootable ISO contains a floppy-emulation image. A writable persistent filesystem needs a separate writable virtual disk or an explicit disk image format; the boot ISO itself must not be treated as writable storage.
-- The heap and PMM are early prototypes. Their current interfaces need to be made safe for task concurrency before kernel code can call them from preempted tasks.
+- The BIOS loader now supports a bounded 256 KiB kernel image, but still loads it through floppy-emulation CHS reads.
+- The kernel still identity-maps the first 1 GiB using 2 MiB pages. A test address space replaces the 4–8 MiB region with 4 KiB page tables and marks only the built-in user code/stack pages as user-accessible; this is not yet a general per-process VM subsystem.
+- The PIT scheduler switches between the kernel shell context and two worker contexts. User-mode tests execute synchronously from the shell; there is not yet a general process table, ELF loader, or independent user-process scheduler.
+- A ring-3 syscall path and fault containment test exist. Kernel-mode faults remain fatal, and user pointer validation is currently limited to the small built-in test ABI.
+- A separate writable IDE data image and a one-file NOVA filesystem are being integrated. The boot ISO itself must not be treated as writable storage.
+- The heap and PMM remain early prototypes; locking, ownership tracking, and failure cleanup need more work before they are general-purpose concurrent allocators.
+
+## Implementation status
+
+- Verified by QEMU in CI: boot image and ISO boot, exception diagnostics, timer scheduler smoke test, ring-3 syscall write/exit, and a deliberate user-mode protection fault returning to the shell.
+- Implemented but still under integration testing: primary-master ATA PIO and `NOVA.TXT` read/write/list commands on the separate data disk.
+- Not complete yet: ELF64 loading, a general process table and lifecycle, multiple-file/directory support, robust allocator locking, and a persistence-across-reboot pass on the latest combined commit.
 
 ## Target architecture
 
