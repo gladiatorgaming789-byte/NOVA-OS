@@ -152,7 +152,7 @@ def main() -> int:
                 write_pattern = re.escape(b"Saved NOVA.TXT to persistent storage.")
                 run_command(
                     ("w", "r", "i", "t", "e", "spc", "h", "e", "l", "l", "o",
-                     "spc", "f", "r", "o", "m", "spc", "N", "O", "V", "A", "ret"),
+                     "spc", "f", "r", "o", "m", "spc", "n", "o", "v", "a", "ret"),
                     write_pattern,
                     "persistent file write",
                     timeout=8,
@@ -161,7 +161,7 @@ def main() -> int:
 
                 ls_pattern = rb"NOVA\.TXT bytes: 0x[0-9A-F]{8}"
                 run_command(("l", "s", "ret"), ls_pattern, "filesystem directory listing")
-                cat_pattern = re.escape(b"NOVA.TXT: hello from NOVA")
+                cat_pattern = re.escape(b"NOVA.TXT: hello from nova")
                 run_command(("c", "a", "t", "ret"), cat_pattern, "filesystem file read")
                 print("Filesystem ls/cat checks passed.")
 
