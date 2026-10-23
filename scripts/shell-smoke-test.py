@@ -92,7 +92,7 @@ def main() -> int:
                 raise RuntimeError(f"{description} failed. Captured serial output:\n{captured}")
 
             help_pattern = re.escape(
-                b"Commands: help, about, clear, memory, alloc, free, pmmtest, schedtest, usertest, userfaulttest, heap, halloc, hfree, uptime, reboot"
+                b"Commands: help, about, clear, memory, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, write, heap, halloc, hfree, uptime, reboot"
             )
             run_command(("h", "e", "l", "p", "ret"), help_pattern, "shell help command")
             print("Shell help check passed.")
@@ -179,6 +179,32 @@ def main() -> int:
                 run_command(("c", "a", "t", "ret"), cat_pattern,
                             "file contents after reboot", previous_count=1, timeout=8)
                 print("Filesystem persistence across reboot passed.")
+
+                install_pattern = re.escape(b"Installed NOVA.ELF on persistent storage.")
+                run_command(("i", "n", "s", "t", "a", "l", "l", "ret"),
+                            install_pattern, "ELF install to filesystem", timeout=8)
+                elf_listing_pattern = rb"NOVA\\.ELF bytes: 0x[0-9A-F]{8}"
+                run_command(("l", "s", "ret"), elf_listing_pattern,
+                            "ELF file listing")
+                elf_output_pattern = re.escape(b"NOVA ELF64 program loaded from disk")
+                run_command(("e", "x", "e", "c", "ret"), elf_output_pattern,
+                            "ELF64 load and ring-3 execution", timeout=8)
+                print("ELF64 disk loader and ring-3 execution passed.")
+
+                old_banner_count = len(re.findall(banner_pattern, output()))
+                reboot_pattern = re.escape(b"Rebooting NOVA OS...")
+                run_command(("r", "e", "b", "o", "o", "t", "ret"),
+                            reboot_pattern, "ELF persistence reboot", timeout=5)
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    if len(re.findall(banner_pattern, output())) > old_banner_count:
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise RuntimeError("VM did not reboot before persisted ELF execution test")
+                run_command(("e", "x", "e", "c", "ret"), elf_output_pattern,
+                            "ELF execution after reboot", previous_count=1, timeout=8)
+                print("ELF executable survived reboot and ran again.")
 
             page_alloc_pattern = rb"Allocated physical page: 0x[0-9A-F]{8,16}"
             run_command(("a", "l", "l", "o", "c", "ret"), page_alloc_pattern,
