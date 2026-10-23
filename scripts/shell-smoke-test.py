@@ -201,10 +201,11 @@ def main() -> int:
                 run_command(("c", "a", "t", "ret"), cat_pattern,
                             "text file remains available beside ELF", previous_count=cat_count)
                 elf_output_pattern = re.escape(b"NOVA ELF64 program loaded from disk")
+                payload_pattern = re.escape(b"user process wrote persistent data")
                 yield_pattern = re.escape(b"NOVA ELF task yielding to scheduler")
                 resumed_pattern = re.escape(b"NOVA ELF task resumed after yield")
                 exit_pattern = re.escape(b"Ring-3 program exited through syscall.")
-                previous_file_reads = len(re.findall(re.escape(b"hello from nova"), output()))
+                previous_file_reads = len(re.findall(payload_pattern, output()))
                 previous_exits = len(re.findall(exit_pattern, output()))
                 previous_yields = len(re.findall(yield_pattern, output()))
                 previous_resumes = len(re.findall(resumed_pattern, output()))
@@ -213,7 +214,7 @@ def main() -> int:
                 deadline = time.monotonic() + 6
                 while time.monotonic() < deadline:
                     data = output()
-                    file_reads = len(re.findall(re.escape(b"hello from nova"), data))
+                    file_reads = len(re.findall(payload_pattern, data))
                     exits = len(re.findall(exit_pattern, data))
                     yields = len(re.findall(yield_pattern, data))
                     resumes = len(re.findall(resumed_pattern, data))
@@ -223,7 +224,7 @@ def main() -> int:
                     time.sleep(0.1)
                 else:
                     raise RuntimeError(
-                        "scheduled ELF process did not read its file, yield, resume, and exit"
+                        "scheduled ELF process did not write/read its file, yield, resume, and exit"
                     )
                 ps_stopped_pattern = re.escape(
                     b"Task 3: user ELF state (0=stopped, 1=runnable): 0x00000000"
@@ -243,7 +244,10 @@ def main() -> int:
                     time.sleep(0.1)
                 else:
                     raise RuntimeError("VM did not reboot before persisted ELF execution test")
-                previous_file_reads = len(re.findall(re.escape(b"hello from nova"), output()))
+                persisted_cat_pattern = re.escape(b"File: user process wrote persistent data")
+                run_command(("c", "a", "t", "ret"), persisted_cat_pattern,
+                            "user-written file survives reboot", previous_count=1)
+                previous_file_reads = len(re.findall(payload_pattern, output()))
                 previous_exits = len(re.findall(exit_pattern, output()))
                 previous_yields = len(re.findall(yield_pattern, output()))
                 previous_resumes = len(re.findall(resumed_pattern, output()))
@@ -252,7 +256,7 @@ def main() -> int:
                 deadline = time.monotonic() + 6
                 while time.monotonic() < deadline:
                     data = output()
-                    file_reads = len(re.findall(re.escape(b"hello from nova"), data))
+                    file_reads = len(re.findall(payload_pattern, data))
                     exits = len(re.findall(exit_pattern, data))
                     yields = len(re.findall(yield_pattern, data))
                     resumes = len(re.findall(resumed_pattern, data))
@@ -262,7 +266,7 @@ def main() -> int:
                     time.sleep(0.1)
                 else:
                     raise RuntimeError(
-                        "persisted ELF process did not read its file, yield, resume, and exit"
+                        "persisted ELF process did not write/read its file, yield, resume, and exit"
                     )
                 print("ELF executable survived reboot and ran again.")
 
