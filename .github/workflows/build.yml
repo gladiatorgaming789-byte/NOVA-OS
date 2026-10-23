@@ -94,8 +94,8 @@ jobs:
             exit 1
           fi
           echo "Exception test passed: INT3 was caught and reported by the IDT."
-      - name: Smoke-test interactive shell through QEMU keyboard
-        run: python3 scripts/shell-smoke-test.py build/nova-os.img
+      - name: Smoke-test interactive shell, user mode, and persistent disk through QEMU
+        run: python3 scripts/shell-smoke-test.py build/nova-os.img build/nova-data.img
       - name: Upload bootable ISO, floppy image, and logs
         uses: actions/upload-artifact@v4
         with:
@@ -103,6 +103,7 @@ jobs:
           path: |
             build/nova-os.iso
             build/nova-os.img
+            build/nova-data.img
             build/SHA256SUMS.txt
             build/serial.log
             build/iso-serial.log
