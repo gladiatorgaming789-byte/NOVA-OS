@@ -86,7 +86,7 @@ def main() -> int:
                 raise RuntimeError(f"{description} failed. Captured serial output:\n{captured}")
 
             help_pattern = re.escape(
-                b"Commands: help, about, clear, memory, alloc, free, pmmtest, schedtest, heap, halloc, hfree, uptime, reboot"
+                b"Commands: help, about, clear, memory, alloc, free, pmmtest, schedtest, usertest, userfaulttest, heap, halloc, hfree, uptime, reboot"
             )
             run_command(("h", "e", "l", "p", "ret"), help_pattern, "shell help command")
             print("Shell help check passed.")
@@ -112,6 +112,34 @@ def main() -> int:
                 "timer-preemptive scheduler regression",
             )
             print("Timer-preemptive scheduler check passed.")
+
+            user_output_pattern = re.escape(
+                b"NOVA ring-3 program: syscall write works"
+            )
+            run_command(
+                ("u", "s", "e", "r", "t", "e", "s", "t", "ret"),
+                user_output_pattern,
+                "ring-3 syscall write/exit test",
+                timeout=6,
+            )
+            print("Ring-3 syscall write/exit test passed.")
+
+            user_fault_pattern = re.escape(
+                b"User process faulted; terminated safely."
+            )
+            run_command(
+                ("u", "s", "e", "r", "f", "a", "u", "l", "t", "t", "e", "s", "t", "ret"),
+                user_fault_pattern,
+                "ring-3 protection fault isolation",
+                timeout=6,
+            )
+            data = run_command(
+                ("h", "e", "l", "p", "ret"),
+                help_pattern,
+                "shell recovery after user fault",
+                previous_count=1,
+            )
+            print("User fault isolation and shell recovery passed.")
 
             page_alloc_pattern = rb"Allocated physical page: 0x[0-9A-F]{8,16}"
             run_command(("a", "l", "l", "o", "c", "ret"), page_alloc_pattern,
