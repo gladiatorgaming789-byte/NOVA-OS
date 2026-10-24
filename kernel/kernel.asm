@@ -3198,13 +3198,6 @@ irq0_handler64:
     mov byte [rdx + r10], 1
     mov al, 0x20
     out 0x20, al
-    cmp byte [rel current_task_index], USER_TASK_INDEX
-    jne .first_entry_checks
-    mov rsi, message_user_task_starting
-    call print_string64
-    mov al, 10
-    call put_char64
-.first_entry_checks:
     cmp byte [rel current_task_index], 1
     je .start_task_a
     cmp byte [rel current_task_index], 2
@@ -3593,7 +3586,6 @@ message_fs_written db 'Saved NOVA.TXT to persistent storage.', 0
 message_shell_fault db 'User shell faulted; retiring shell task.', 0
 message_shell_vm_failed db 'Unable to initialize protected user shell memory.', 0
 message_user_task_scheduled db 'Scheduled ring-3 regression program.', 0
-message_user_task_starting db 'Starting ring-3 task.', 0
 message_fs_written2 db 'Saved NOVA2.TXT to persistent storage.', 0
 message_fs_read2 db 'File NOVA2.TXT: ', 0
 message_fs_write2_usage db 'Usage: write2 <text> (maximum 121 bytes).', 0
