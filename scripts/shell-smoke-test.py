@@ -186,7 +186,7 @@ def main() -> int:
                 cat2_pattern = re.escape(b"File NOVA2.TXT: second file")
                 run_command(("c", "a", "t", "2", "ret"), cat2_pattern,
                             "second named file read")
-                listing_data = run_command(("l", "s", "ret"), rb"NOVA2\\.TXT bytes: 0x[0-9A-F]{8}",
+                listing_data = run_command(("l", "s", "ret"), rb"NOVA2\.TXT bytes: 0x[0-9A-F]{8}",
                                            "second file directory listing")
                 if b"NOVA.TXT bytes: 0x" not in listing_data:
                     raise RuntimeError("writing NOVA2.TXT damaged the first file entry")
