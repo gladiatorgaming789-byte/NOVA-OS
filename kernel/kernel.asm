@@ -930,11 +930,11 @@ execute_command64:
     jmp .done
 .usertest:
     xor edi, edi
-    call user_test_run64
+    call user_task_test_start64
     jmp .done
 .userfaulttest:
     mov edi, 1
-    call user_test_run64
+    call user_task_test_start64
     jmp .done
 .uptime:
     mov rsi, message_uptime
@@ -2460,6 +2460,55 @@ vm_zero_page64:
     ret
 
 ; EDI selects 0=normal user program, 1=deliberate user-only protection fault.
+; Schedule the built-in ring-3 regression program as a real task instead of
+; entering user mode synchronously inside the shell's syscall stack.
+user_task_test_start64:
+    push rbx
+    push r12
+    push r13
+    mov r12d, edi
+    cmp byte [rel user_process_state], 1
+    je .busy
+    call user_vm_init64
+    test eax, eax
+    jz .failed
+    mov rdi, [rel user_code_page]
+    test r12d, r12d
+    jnz .fault_program
+    lea rsi, [rel user_program_start]
+    mov ecx, user_program_end - user_program_start
+    jmp .copy
+.fault_program:
+    lea rsi, [rel user_fault_program_start]
+    mov ecx, user_fault_program_end - user_fault_program_start
+.copy:
+    rep movsb
+    mov qword [rel user_process_entry], USER_CODE_VIRT
+    mov qword [rel task_rsp + USER_TASK_INDEX*8], 0
+    mov byte [rel task_started + USER_TASK_INDEX], 0
+    mov byte [rel user_process_state], 1
+    mov rsi, message_user_task_scheduled
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.busy:
+    mov rsi, message_fs_exec_running
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.failed:
+    mov rsi, message_uservm_failed
+    call print_string64
+    mov al, 10
+    call put_char64
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
 user_test_run64:
     push rbp
     push rbx
@@ -2888,21 +2937,19 @@ user_task_terminate64:
     mov al, 10
     call put_char64
     cmp byte [rel current_task_index], SHELL_TASK_INDEX
-    jne .retire_elf
-    mov qword [rel task_rsp + SHELL_TASK_INDEX*8], 0
-    mov byte [rel task_started + SHELL_TASK_INDEX], 0
-    mov byte [rel shell_process_state], 1
-    jmp .restore_kernel
-.retire_elf:
+    je .restart_shell
+    ; Retire the ELF/test process and resume the shell's saved preemption frame.
     mov byte [rel user_process_state], 0
     mov qword [rel task_rsp + USER_TASK_INDEX*8], 0
     mov byte [rel task_started + USER_TASK_INDEX], 0
-.restore_kernel:
-    mov eax, PML4_ADDR
+    mov byte [rel current_task_index], SHELL_TASK_INDEX
+    mov rax, [rel shell_pml4_page]
     mov cr3, rax
-    mov qword [rel tss64 + 4], TSS_STACK_TOP
-    mov byte [rel current_task_index], 0
-    mov rsp, [rel task_rsp]
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
+    mov rsp, [rel task_rsp + SHELL_TASK_INDEX*8]
+    test rsp, rsp
+    jz .no_shell_context
     pop r15
     pop r14
     pop r13
@@ -2918,6 +2965,32 @@ user_task_terminate64:
     pop rdx
     pop rcx
     pop rax
+    iretq
+.no_shell_context:
+    ; Defensive fallback: restart the user shell if no preemption frame exists.
+    mov byte [rel shell_process_state], 1
+    mov rsp, [rel shell_kernel_stack_top]
+    push qword USER_DATA_SEL
+    push qword USER_STACK_TOP
+    push qword 0x202
+    push qword USER_CODE_SEL
+    push qword USER_CODE_VIRT
+    iretq
+.restart_shell:
+    mov qword [rel task_rsp + SHELL_TASK_INDEX*8], 0
+    mov byte [rel task_started + SHELL_TASK_INDEX], 0
+    mov byte [rel shell_process_state], 1
+    mov byte [rel current_task_index], SHELL_TASK_INDEX
+    mov rax, [rel shell_pml4_page]
+    mov cr3, rax
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
+    mov rsp, [rel shell_kernel_stack_top]
+    push qword USER_DATA_SEL
+    push qword USER_STACK_TOP
+    push qword 0x202
+    push qword USER_CODE_SEL
+    push qword USER_CODE_VIRT
     iretq
 
 user_fault_exit64:
@@ -3514,6 +3587,7 @@ message_fs_empty db 'NOVA.TXT is empty or does not exist.', 0
 message_fs_written db 'Saved NOVA.TXT to persistent storage.', 0
 message_shell_fault db 'User shell faulted; retiring shell task.', 0
 message_shell_vm_failed db 'Unable to initialize protected user shell memory.', 0
+message_user_task_scheduled db 'Scheduled ring-3 regression program.', 0
 message_fs_written2 db 'Saved NOVA2.TXT to persistent storage.', 0
 message_fs_read2 db 'File NOVA2.TXT: ', 0
 message_fs_write2_usage db 'Usage: write2 <text> (maximum 121 bytes).', 0
