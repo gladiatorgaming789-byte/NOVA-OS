@@ -3087,6 +3087,12 @@ irq0_handler64:
     jb .next_task_ready
     xor al, al
 .next_task_ready:
+    ; Task slot 0 is no longer an active context: the ring-3 shell is task 4.
+    ; Skip slot 0 so the scheduler can always rotate among worker/user tasks.
+    test al, al
+    jnz .check_user
+    mov al, 1
+.check_user:
     cmp al, USER_TASK_INDEX
     jne .check_shell
     cmp byte [rel user_process_state], 1
@@ -3098,7 +3104,7 @@ irq0_handler64:
     jne .task_runnable
     cmp byte [rel shell_process_state], 1
     je .task_runnable
-    xor al, al
+    mov al, 1
 .task_runnable:
     mov [rel current_task_index], al
     movzx r10d, al
