@@ -2473,6 +2473,7 @@ user_test_run64:
 .copy_program:
     rep movsb
     mov [rel user_return_rsp], rsp
+    mov byte [rel sync_user_test_active], 1
     mov rax, [rel user_pml4_page]
     mov cr3, rax
     push qword USER_DATA_SEL
@@ -2745,14 +2746,22 @@ syscall80_handler64:
     iretq
 
 .exit:
-    cmp byte [rel current_task_index], 3
+    cmp byte [rel current_task_index], USER_TASK_INDEX
     je user_task_exit64
     mov rsi, message_user_exit
     call print_string64
     mov al, 10
     call put_char64
-    mov rax, PML4_ADDR
+    mov byte [rel sync_user_test_active], 0
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    jne .exit_kernel_cr3
+    mov rax, [rel shell_pml4_page]
     mov cr3, rax
+    jmp .exit_restore
+.exit_kernel_cr3:
+    mov eax, PML4_ADDR
+    mov cr3, rax
+.exit_restore:
     mov rsp, [rel user_return_rsp]
     pop r15
     pop r14
@@ -2764,14 +2773,22 @@ syscall80_handler64:
     ret
 
 user_bad_syscall_exit64:
-    cmp byte [rel current_task_index], 3
+    cmp byte [rel current_task_index], USER_TASK_INDEX
     je user_task_bad_syscall_exit64
     mov rsi, message_user_bad_syscall
     call print_string64
     mov al, 10
     call put_char64
-    mov rax, PML4_ADDR
+    mov byte [rel sync_user_test_active], 0
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    jne .bad_kernel_cr3
+    mov rax, [rel shell_pml4_page]
     mov cr3, rax
+    jmp .bad_restore
+.bad_kernel_cr3:
+    mov eax, PML4_ADDR
+    mov cr3, rax
+.bad_restore:
     mov rsp, [rel user_return_rsp]
     pop r15
     pop r14
@@ -2891,8 +2908,16 @@ user_fault_exit64:
     call print_string64
     mov al, 10
     call put_char64
-    mov rax, PML4_ADDR
+    mov byte [rel sync_user_test_active], 0
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    jne .fault_kernel_cr3
+    mov rax, [rel shell_pml4_page]
     mov cr3, rax
+    jmp .fault_restore
+.fault_kernel_cr3:
+    mov eax, PML4_ADDR
+    mov cr3, rax
+.fault_restore:
     mov rsp, [rel user_return_rsp]
     pop r15
     pop r14
@@ -3022,6 +3047,27 @@ irq0_handler64:
     push r15
 
     inc dword [rel timer_ticks]
+    cmp byte [rel sync_user_test_active], 1
+    je .sync_return
+.sync_return:
+    mov al, 0x20
+    out 0x20, al
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
     movzx eax, byte [rel current_task_index]
     lea rdx, [rel task_rsp]
     mov [rdx + rax*8], rsp
@@ -3495,6 +3541,8 @@ user_stack_page dq 0
 user_return_rsp dq 0
 user_process_entry dq 0
 user_process_state db 0
+shell_process_state db 0
+sync_user_test_active db 0
 current_task_index db 0
 task_started times TASK_COUNT db 0
 align 8
