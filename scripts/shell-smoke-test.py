@@ -206,7 +206,15 @@ def main() -> int:
                     raise RuntimeError("VM did not reboot for filesystem persistence test")
                 run_command(("c", "a", "t", "ret"), cat_pattern,
                             "file contents after reboot", previous_count=1, timeout=8)
-                print("Filesystem persistence across reboot passed.")
+                cat2_count = len(re.findall(cat2_pattern, output()))
+                run_command(("c", "a", "t", "2", "ret"), cat2_pattern,
+                            "second file contents after reboot", previous_count=cat2_count)
+                listing_data = run_command(("l", "s", "ret"),
+                                           rb"NOVA2\.TXT bytes: 0x[0-9A-F]{8}",
+                                           "second file directory entry after reboot")
+                if b"NOVA.TXT bytes: 0x" not in listing_data:
+                    raise RuntimeError("second-file persistence damaged NOVA.TXT entry")
+                print("Both named files persist across reboot.")
 
                 install_pattern = re.escape(b"Installed NOVA.ELF on persistent storage.")
                 run_command(("i", "n", "s", "t", "a", "l", "l", "ret"),
