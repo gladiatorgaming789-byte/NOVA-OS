@@ -2,7 +2,7 @@
 
 **NOVA-OS is an experimental operating system built from scratch for x86-64 PCs and Oracle VirtualBox.** It is not a Linux distribution and does not use the Linux kernel.
 
-> **Status:** experimental command-line OS milestone in active development. The current branch has timer-preempted kernel tasks, ring-3 ELF execution with bounded file-read/write syscalls, user-fault isolation, and an early two-slot filesystem over a separate IDE data disk. It is still not a general-purpose OS: the interactive shell remains in kernel mode, the ELF loader supports one bounded static PT_LOAD segment, and storage is intentionally minimal.
+> **Status:** experimental command-line OS milestone in active development. The current branch has timer-preempted kernel tasks, ring-3 ELF execution with bounded file-read/write syscalls, user-fault isolation, and a small fixed-slot filesystem with two persistent named text files plus a separately stored ELF executable. It is still not a general-purpose OS: the interactive shell remains in kernel mode, the ELF loader supports one bounded static PT_LOAD segment, and storage is intentionally minimal.
 
 ## Project goals
 
