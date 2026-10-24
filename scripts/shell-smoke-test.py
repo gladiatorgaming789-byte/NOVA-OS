@@ -139,6 +139,53 @@ def main() -> int:
             )
             print("Ring-3 syscall write/exit test passed.")
 
+            # Repeatedly launch and exit the same ring-3 test process. The
+            # physical-page count must return to its baseline after every run;
+            # otherwise process cleanup is leaking user address-space pages.
+            free_pages_pattern = rb"Free 4KiB pages: 0x([0-9A-F]{8})"
+            baseline_data = run_command(
+                ("m", "e", "m", "o", "r", "y", "ret"),
+                free_pages_pattern,
+                "baseline physical-page count before process stress",
+            )
+            baseline_matches = re.findall(free_pages_pattern, baseline_data)
+            if not baseline_matches:
+                raise RuntimeError("memory command did not report free physical pages")
+            baseline_pages = int(baseline_matches[-1], 16)
+            exit_pattern = re.escape(b"Ring-3 program exited through syscall.")
+            for iteration in range(8):
+                previous_output_count = len(re.findall(user_output_pattern, output()))
+                previous_exit_count = len(re.findall(exit_pattern, output()))
+                run_command(
+                    ("u", "s", "e", "r", "t", "e", "s", "t", "ret"),
+                    user_output_pattern,
+                    f"ring-3 process stress launch {iteration + 1}",
+                    previous_count=previous_output_count,
+                    timeout=6,
+                )
+                deadline = time.monotonic() + 6
+                while time.monotonic() < deadline:
+                    if len(re.findall(exit_pattern, output())) > previous_exit_count:
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise RuntimeError(
+                        f"ring-3 process stress run {iteration + 1} did not exit"
+                    )
+            final_data = run_command(
+                ("m", "e", "m", "o", "r", "y", "ret"),
+                free_pages_pattern,
+                "physical-page count after process stress",
+            )
+            final_matches = re.findall(free_pages_pattern, final_data)
+            final_pages = int(final_matches[-1], 16) if final_matches else -1
+            if final_pages != baseline_pages:
+                raise RuntimeError(
+                    "ring-3 process stress leaked physical pages: "
+                    f"baseline={baseline_pages}, final={final_pages}"
+                )
+            print("Eight ring-3 process launches exited without leaking physical pages.")
+
             user_fault_pattern = re.escape(
                 b"User process faulted; terminated safely."
             )
