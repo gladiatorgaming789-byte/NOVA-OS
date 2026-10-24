@@ -20,6 +20,7 @@ USER_DATA_SEL equ 0x33
 FS_SUPER_LBA equ 0
 FS_DATA_LBA equ 1
 FS_ELF_LBA equ 2
+FS_DATA2_LBA equ 3
 FS_MAX_FILE_SIZE equ 500
 
 kernel_entry:
@@ -655,6 +656,11 @@ execute_command64:
     test al, al
     jnz .fs_ls
     mov rsi, line_buffer
+    mov rdi, command_cat2
+    call strings_equal64
+    test al, al
+    jnz .fs_cat2
+    mov rsi, line_buffer
     mov rdi, command_cat
     call strings_equal64
     test al, al
@@ -671,7 +677,12 @@ execute_command64:
     jnz .userfaulttest
     mov rsi, line_buffer
     mov rdi, command_write_prefix
+    call string_starts_with64    mov rsi, line_buffer
+    mov rdi, command_write2_prefix
     call string_starts_with64
+    test al, al
+    jnz .fs_write2
+
     test al, al
     jnz .fs_write
     mov rsi, line_buffer
@@ -917,6 +928,12 @@ execute_command64:
     jmp .done
 .fs_cat:
     call fs_cat64
+    jmp .done
+.fs_cat2:
+    call fs_cat2_64
+    jmp .done
+.fs_write2:
+    call fs_write2_64
     jmp .done
 .fs_write:
     call fs_write64
@@ -1410,6 +1427,9 @@ fs_read_header64:
     mov eax, [rel fs_sector_buffer + 28]
     cmp eax, FS_MAX_FILE_SIZE
     ja .fail
+    mov eax, [rel fs_sector_buffer + 36]
+    cmp eax, FS_MAX_FILE_SIZE
+    ja .fail
     mov eax, 1
     ret
 .fail:
@@ -1437,7 +1457,7 @@ fs_list64:
     call put_char64
 .slot1:
     cmp dword [rel fs_sector_buffer + 28], 0
-    je .done
+    je .slot2
     lea rsi, [rel fs_sector_buffer + 20]
     mov ecx, 8
 .name1:
@@ -1451,6 +1471,22 @@ fs_list64:
     call print_hex32
     mov al, 10
     call put_char64
+.slot2:
+    cmp dword [rel fs_sector_buffer + 36], 0
+    je .done
+    lea rsi, [rel fs_sector_buffer + 40]
+    mov ecx, 8
+.name2:
+    mov al, [rsi]
+    call put_char64
+    inc rsi
+    loop .name2
+    mov rsi, message_fs_list
+    call print_string64
+    mov eax, [rel fs_sector_buffer + 36]
+    call print_hex32
+    mov al, 10
+    call put_char64
 .done:
     ret
 .invalid:
@@ -1461,6 +1497,52 @@ fs_list64:
     ret
 
 fs_cat64:
+
+; Read the third directory entry, stored in its own sector.
+fs_cat2_64:
+    call fs_read_header64
+    test eax, eax
+    jz .invalid
+    mov ecx, [rel fs_sector_buffer + 36]
+    test ecx, ecx
+    jz .empty
+    push rcx
+    mov eax, FS_DATA2_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .disk_error
+    pop rcx
+    mov rsi, message_fs_read2
+    call print_string64
+    lea rsi, [rel fs_sector_buffer]
+.print:
+    test ecx, ecx
+    jz .done
+    mov al, [rsi]
+    call put_char64
+    inc rsi
+    dec ecx
+    jmp .print
+.done:
+    mov al, 10
+    call put_char64
+    ret
+.empty:
+    mov rsi, message_fs_empty
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.disk_error:
+    pop rcx
+.invalid:
+    mov rsi, message_fs_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+
     call fs_read_header64
     test eax, eax
     jz .invalid
@@ -1505,6 +1587,79 @@ fs_cat64:
     ret
 
 fs_write64:
+
+; Store a second user text file in directory slot 3 / data sector 3.
+fs_write2_64:
+    mov ecx, [rel line_length]
+    cmp ecx, 7
+    jbe .usage
+    sub ecx, 7
+    cmp ecx, FS_MAX_FILE_SIZE
+    ja .usage
+    mov [rel fs_file_size], ecx
+    mov eax, FS_SUPER_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .disk_error
+    mov rsi, fs_sector_buffer
+    mov rdi, fs_magic
+    mov ecx, 7
+.check_signature:
+    mov al, [rsi]
+    cmp al, [rdi]
+    jne .invalid
+    inc rsi
+    inc rdi
+    loop .check_signature
+    mov eax, [rel fs_file_size]
+    mov [rel fs_sector_buffer + 36], eax
+    lea rsi, [rel fs_filename2]
+    lea rdi, [rel fs_sector_buffer + 40]
+    mov ecx, 8
+    rep movsb
+    mov eax, FS_SUPER_LBA
+    lea rsi, [rel fs_sector_buffer]
+    call ata_write_sector64
+    test eax, eax
+    jz .disk_error
+    lea rdi, [rel fs_sector_buffer]
+    xor eax, eax
+    mov ecx, 64
+    rep stosq
+    mov ecx, [rel fs_file_size]
+    lea rsi, [rel line_buffer + 7]
+    lea rdi, [rel fs_sector_buffer]
+    rep movsb
+    mov eax, FS_DATA2_LBA
+    lea rsi, [rel fs_sector_buffer]
+    call ata_write_sector64
+    test eax, eax
+    jz .disk_error
+    mov rsi, message_fs_written2
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.usage:
+    mov rsi, message_fs_write2_usage
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.invalid:
+    mov rsi, message_fs_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.disk_error:
+    mov rsi, message_fs_no_disk
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+
     ; Require at least one byte after "write " and keep a sector-sized bound.
     mov ecx, [rel line_length]
     cmp ecx, 6
@@ -2924,6 +3079,10 @@ command_install db 'install', 0
 command_exec db 'exec', 0
 command_ls db 'ls', 0
 command_cat db 'cat', 0
+command_cat2 db 'cat2', 0
+command_write2_prefix db 'write2 ', 0
+fs_filename2 db 'NOVA2.TXT'
+
 fs_magic db 'NOVAFS1'
 fs_filename db 'NOVA.TXT'
 fs_elf_filename db 'NOVA.ELF'
@@ -2957,6 +3116,10 @@ message_fs_no_disk db 'Storage unavailable: attach a writable IDE data disk.', 0
 message_fs_invalid db 'Storage is unformatted or has an invalid NOVA filesystem header.', 0
 message_fs_empty db 'NOVA.TXT is empty or does not exist.', 0
 message_fs_written db 'Saved NOVA.TXT to persistent storage.', 0
+message_fs_written2 db 'Saved NOVA2.TXT to persistent storage.', 0
+message_fs_read2 db 'File NOVA2.TXT: ', 0
+message_fs_write2_usage db 'Usage: write2 <text> (maximum 121 bytes).', 0
+
 message_fs_list db ' bytes: 0x', 0
 message_fs_read db 'File: ', 0
 message_fs_write_usage db 'Usage: write <text> (maximum 121 bytes).', 0
