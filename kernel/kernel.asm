@@ -340,10 +340,20 @@ long_mode_entry:
     call print_string64
     mov al, 10
     call put_char64
-    sti
-.idle_loop:
-    hlt
-    jmp .idle_loop
+    ; Enter the protected user shell directly. The first PIT tick saves this
+    ; ring-3 context in task slot 4, after which round-robin preemption applies.
+    cli
+    mov byte [rel current_task_index], SHELL_TASK_INDEX
+    mov rax, [rel shell_pml4_page]
+    mov cr3, rax
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
+    push qword USER_DATA_SEL
+    push qword USER_STACK_TOP
+    push qword 0x202
+    push qword USER_CODE_SEL
+    push qword USER_CODE_VIRT
+    iretq
 .shell_vm_fail:
     mov rsi, message_shell_vm_failed
     call print_string64
