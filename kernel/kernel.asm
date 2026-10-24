@@ -2838,6 +2838,9 @@ syscall_shell_run_command64:
     pop rax
     iretq
 
+user_shell_fault_exit64:
+    mov rsi, message_shell_fault
+    jmp user_task_terminate64
 user_task_exit64:
     mov rsi, message_user_exit
     jmp user_task_terminate64
