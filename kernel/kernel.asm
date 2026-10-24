@@ -2228,6 +2228,9 @@ user_vm_init64:
     mov r14d, 1
     jmp .done
 .fail:
+    ; Roll back every page acquired before an allocation failure. The helper
+    ; tolerates zero pointers and clears each owner field after releasing it.
+    call user_vm_cleanup64
     xor r14d, r14d
 .done:
     mov eax, r14d
@@ -2931,6 +2934,57 @@ user_task_fault_exit64:
     jmp user_task_terminate64
 user_task_bad_syscall_exit64:
     mov rsi, message_user_bad_syscall
+; Release the single user process's owned address-space pages. This is
+; called only with a kernel page table active, both for failed setup rollback
+; and after a task has switched away from its user CR3.
+user_vm_cleanup64:
+    push rbx
+    mov rdi, [rel user_code_page]
+    test rdi, rdi
+    jz .free_stack
+    call pmm_free_page64
+    mov qword [rel user_code_page], 0
+.free_stack:
+    mov rdi, [rel user_stack_page]
+    test rdi, rdi
+    jz .free_code_pt
+    call pmm_free_page64
+    mov qword [rel user_stack_page], 0
+.free_code_pt:
+    mov rdi, [rel user_code_pt_page]
+    test rdi, rdi
+    jz .free_stack_pt
+    call pmm_free_page64
+    mov qword [rel user_code_pt_page], 0
+.free_stack_pt:
+    mov rdi, [rel user_stack_pt_page]
+    test rdi, rdi
+    jz .free_pd
+    call pmm_free_page64
+    mov qword [rel user_stack_pt_page], 0
+.free_pd:
+    mov rdi, [rel user_pd_page]
+    test rdi, rdi
+    jz .free_pdpt
+    call pmm_free_page64
+    mov qword [rel user_pd_page], 0
+.free_pdpt:
+    mov rdi, [rel user_pdpt_page]
+    test rdi, rdi
+    jz .free_pml4
+    call pmm_free_page64
+    mov qword [rel user_pdpt_page], 0
+.free_pml4:
+    mov rdi, [rel user_pml4_page]
+    test rdi, rdi
+    jz .clear_entry
+    call pmm_free_page64
+    mov qword [rel user_pml4_page], 0
+.clear_entry:
+    mov qword [rel user_process_entry], 0
+    pop rbx
+    ret
+
 user_task_terminate64:
     call print_string64
     mov al, 10
@@ -2946,6 +3000,9 @@ user_task_terminate64:
     mov cr3, rax
     mov rax, [rel shell_kernel_stack_top]
     mov [rel tss64 + 4], rax
+    ; We are now on the kernel's shared identity map, not the retired user CR3.
+    ; Reclaim the process's seven owned pages before restoring the shell frame.
+    call user_vm_cleanup64
     mov rsp, [rel task_rsp + SHELL_TASK_INDEX*8]
     test rsp, rsp
     jz .no_shell_context
