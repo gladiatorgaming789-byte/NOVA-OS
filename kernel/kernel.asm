@@ -2534,8 +2534,7 @@ user_test_run64:
     mov [rel user_return_rsp], rsp
     mov byte [rel sync_user_test_active], 1
     ; Nested ring-3 tests must not reuse the shell syscall stack for CPL0 entry.
-    mov rax, [rel user_kernel_stack_top]
-    mov [rel tss64 + 4], rax
+    mov qword [rel tss64 + 4], TSS_STACK_TOP
     mov rax, [rel user_pml4_page]
     mov cr3, rax
     push qword USER_DATA_SEL
@@ -3182,8 +3181,7 @@ irq0_handler64:
 .user_cr3:
     mov rax, [rel user_pml4_page]
     mov cr3, rax
-    mov rax, [rel user_kernel_stack_top]
-    mov [rel tss64 + 4], rax
+    mov qword [rel tss64 + 4], TSS_STACK_TOP
     jmp .cr3_ready
 .shell_cr3:
     mov rax, [rel shell_pml4_page]
@@ -3213,7 +3211,7 @@ irq0_handler64:
     je .start_task_b
     cmp byte [rel current_task_index], SHELL_TASK_INDEX
     je .start_shell
-    mov rsp, [rel user_kernel_stack_top]
+    mov rsp, TASK3_STACK_TOP
     push qword USER_DATA_SEL
     push qword USER_STACK_TOP
     push qword 0x202
