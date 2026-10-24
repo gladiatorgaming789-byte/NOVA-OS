@@ -3220,6 +3220,8 @@ exception_common64:
     mov rax, [rsp + 24]
     test al, 3
     jz .kernel_fault
+    cmp byte [rel sync_user_test_active], 1
+    je user_fault_exit64
     cmp byte [rel current_task_index], USER_TASK_INDEX
     je user_task_fault_exit64
     cmp byte [rel current_task_index], SHELL_TASK_INDEX
