@@ -92,7 +92,7 @@ def main() -> int:
                 raise RuntimeError(f"{description} failed. Captured serial output:\n{captured}")
 
             help_pattern = re.escape(
-                b"Commands: help, about, clear, memory, mem, ps, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, write, heap, halloc, hfree, uptime, reboot"
+                b"Commands: help, about, clear, memory, mem, ps, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, cat2, write, write2, heap, halloc, hfree, uptime, reboot"
             )
             run_command(("h", "e", "l", "p", "ret"), help_pattern, "shell help command")
             print("Shell help check passed.")
