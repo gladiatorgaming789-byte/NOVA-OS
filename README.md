@@ -2,7 +2,7 @@
 
 **NOVA-OS is an experimental operating system built from scratch for x86-64 PCs and Oracle VirtualBox.** It is not a Linux distribution and does not use the Linux kernel.
 
-> **Status:** experimental command-line OS milestone in active development. The current branch has timer-preempted kernel tasks, ring-3 ELF execution with bounded file-read/write syscalls, user-fault isolation, and a small fixed-slot filesystem with two persistent named text files plus a separately stored ELF executable. It is still not a general-purpose OS: the interactive shell remains in kernel mode, the ELF loader supports one bounded static PT_LOAD segment, and storage is intentionally minimal.
+> **Status:** experimental command-line OS milestone in active development. The current branch has timer-preempted kernel tasks, ring-3 ELF execution with bounded file-read/write syscalls, user-fault isolation, and a small fixed-slot filesystem with two persistent named text files plus a separately stored ELF executable. It is still not a general-purpose OS: the shell and ELF test program use separate fixed page-table layouts rather than a general VM subsystem, the ELF loader supports one bounded static PT_LOAD segment, and storage is intentionally minimal.
 
 ## Project goals
 
@@ -40,13 +40,13 @@ On the `milestone/command-line-os` branch, the kernel currently provides:
 
 - `help`, `memory`, `alloc`, `free`, `pmmtest`, `heap`, `halloc`, `hfree`, and `uptime` diagnostics.
 - `schedtest` to verify both timer-preempted kernel worker tasks progress.
-- `usertest` to run a built-in ring-3 program that prints through syscall 1 and exits through syscall 2.
-- `userfaulttest` to verify a user-mode protection fault terminates the test program and returns control to the shell.
-- `write <text>`, `ls`, and `cat` for the early `NOVA.TXT` file on a separate writable IDE disk. `install` places a built-in ELF64 test executable on the disk and `exec` validates and loads it into ring 3. The current filesystem has one file slot and a 512-byte data sector; the shell line buffer limits a write to 121 bytes.
+- `usertest` schedules a built-in ring-3 program as a preemptible task; it prints through syscall 1 and exits through syscall 2.
+- `userfaulttest` schedules a user-mode protection-fault test and verifies that the faulting task is terminated without losing the shell.
+- `write <text>` and `write2 <text>` store two independent named text files; `ls`, `cat`, and `cat2` list/read them. `install` places a built-in ELF64 test executable on the disk and `exec` validates and loads it into ring 3. The filesystem remains fixed-slot with bounded single-sector file contents; the shell line buffer limits writes to 121 bytes.
 
 Attach both the ISO and `nova-data.img` to VirtualBox. Keep the ISO as the boot device and attach `nova-data.img` as a writable IDE hard disk. Do not use the ISO as the writable data volume. The automated workflow verifies that a ring-3 executable writes file contents, reads them back, and that the updated file survives a full guest reboot.
 
-These are integration milestones, not claims of a complete process/filesystem implementation. The next internal work is a real process table and lifecycle, stronger page-table and allocator invariants, and expanding storage beyond one file before the GUI phase.
+The interactive shell now runs in ring 3 with a separate address space and supervisor-only kernel entry stack. Keyboard input and command execution cross a bounded syscall interface; the PIT scheduler preempts it alongside kernel workers and user ELF tasks. These are integration milestones, not a complete process/filesystem implementation. Remaining internal work includes a general process table, safer process/allocator cleanup, broader virtual-memory APIs, and directory-based storage before the GUI phase.
 
 ## Testing policy
 
