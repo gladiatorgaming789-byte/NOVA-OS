@@ -10,7 +10,7 @@ This work is developed on `milestone/command-line-os`; `main` remains the known-
 
 - The BIOS loader now supports a bounded 256 KiB kernel image, but still loads it through floppy-emulation CHS reads.
 - The kernel still identity-maps the first 1 GiB using 2 MiB pages. A test address space replaces the 4–8 MiB region with 4 KiB page tables and marks only the built-in user code/stack pages as user-accessible; this is not yet a general per-process VM subsystem.
-- The PIT scheduler switches between the kernel shell context, two worker contexts, and one ring-3 ELF task. User-mode test programs can run synchronously from the shell; there is not yet a general process table or a ring-3 interactive shell.
+- The PIT scheduler switches between two kernel worker contexts, the ring-3 interactive shell, and one ring-3 ELF/test task. The shell has a separate page-table hierarchy, user code/stack pages, a supervisor-only kernel entry stack, and bounded syscalls for keyboard input, command dispatch, output, and file operations. There is not yet a general process table or general-purpose per-process VM subsystem.
 - A ring-3 syscall path and fault containment test exist. Kernel-mode faults remain fatal, and user pointer validation is currently limited to the small built-in test ABI.
 - A separate writable IDE data image contains a small fixed-slot filesystem: `NOVA.TXT`, `NOVA.ELF`, and `NOVA2.TXT` use distinct metadata entries/data sectors. This is not yet a general directory-based filesystem. The boot ISO itself must not be treated as writable storage.
 - The heap and PMM remain early prototypes; locking, ownership tracking, and failure cleanup need more work before they are general-purpose concurrent allocators.
@@ -20,7 +20,7 @@ This work is developed on `milestone/command-line-os`; `main` remains the known-
 - Verified by QEMU in CI: boot image and ISO boot, exception diagnostics, timer scheduler smoke test, ring-3 syscall write/exit/yield, an ELF task yielding and resuming under preemption, a deliberate user-mode protection fault returning to the shell, and a user ELF process restarting and completing a second time without rebooting.
 - Verified by QEMU in CI: primary-master ATA PIO; `write`, `write2`, `ls`, `cat`, and `cat2`; independent data sectors for two named text files; and both text files surviving a full guest reboot.
 - Implemented and verified in the latest successful full workflow: a bounded ELF64 loader for one static PT_LOAD segment, a built-in executable installed on the writable disk, and ring-3 syscalls for bounded file reads and writes. The test executable writes file contents, reads them back, yields/resumes under scheduling, exits, restarts successfully in the same boot, and the updated file is verified after a full guest reboot.
-- Not complete yet: moving the interactive shell into ring 3, a general process table and lifecycle, directories/arbitrary file creation, robust allocator locking, allocator ownership cleanup, and broader virtual-memory APIs. The current shell remains kernel-mode, so this is not yet the complete pre-GUI milestone.
+- Not complete yet: a general process table and lifecycle, safe reclamation of per-process page tables/stacks, allocator locking/ownership cleanup, broader virtual-memory APIs, and directory/arbitrary file creation. The shell is now protected ring 3, but the full pre-GUI milestone still needs these lifecycle and storage hardening tasks.
 
 ## Target architecture
 
