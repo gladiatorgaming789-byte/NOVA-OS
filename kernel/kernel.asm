@@ -1475,7 +1475,7 @@ fs_list64:
     cmp dword [rel fs_sector_buffer + 36], 0
     je .done
     lea rsi, [rel fs_sector_buffer + 40]
-    mov ecx, 8
+    mov ecx, 9
 .name2:
     mov al, [rsi]
     call put_char64
@@ -1613,7 +1613,7 @@ fs_write2_64:
     mov [rel fs_sector_buffer + 36], eax
     lea rsi, [rel fs_filename2]
     lea rdi, [rel fs_sector_buffer + 40]
-    mov ecx, 8
+    mov ecx, 9
     rep movsb
     mov eax, FS_SUPER_LBA
     lea rsi, [rel fs_sector_buffer]
