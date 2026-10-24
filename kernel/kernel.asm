@@ -12,6 +12,9 @@ TASK1_STACK_TOP equ 0x88000
 TASK2_STACK_TOP equ 0x8C000
 TASK3_STACK_TOP equ 0x8A000
 TSS_STACK_TOP equ 0x8E000
+USER_TASK_INDEX equ 3
+SHELL_TASK_INDEX equ 4
+TASK_COUNT equ 5
 USER_CODE_VIRT equ 0x400000
 USER_STACK_VIRT equ 0x600000
 USER_STACK_TOP equ 0x600FF0
@@ -325,54 +328,31 @@ long_mode_entry:
     call pic_init64
     call pit_init64
     call pmm_init64
+    call shell_vm_init64
+    test eax, eax
+    jz .shell_vm_fail
     call scheduler_init64
 %ifdef NOVA_TEST_EXCEPTION
     int3                         ; CI-only fault injection validates the IDT.
 %endif
     call screen_clear64
-    sti
     mov rsi, banner64
     call print_string64
     mov al, 10
     call put_char64
-    call print_prompt64
-
-.keyboard_loop:
-    call poll_keyboard64
-    test al, al
-    jz .keyboard_loop
-    cmp al, 10
-    je .enter
-    cmp al, 8
-    je .backspace
-    mov ecx, [line_length]
-    cmp ecx, 127
-    jae .keyboard_loop
-    mov [line_buffer + rcx], al
-    inc ecx
-    mov [line_length], ecx
-    call put_char64
-    jmp .keyboard_loop
-.backspace:
-    mov ecx, [line_length]
-    test ecx, ecx
-    jz .keyboard_loop
-    dec ecx
-    mov [line_length], ecx
-    mov byte [line_buffer + rcx], 0
-    mov al, 8
-    call put_char64
-    jmp .keyboard_loop
-.enter:
-    mov ecx, [line_length]
-    mov byte [line_buffer + rcx], 0
+    sti
+.idle_loop:
+    hlt
+    jmp .idle_loop
+.shell_vm_fail:
+    mov rsi, message_shell_vm_failed
+    call print_string64
     mov al, 10
     call put_char64
-    call execute_command64
-    mov dword [line_length], 0
-    mov byte [line_buffer], 0
-    call print_prompt64
-    jmp .keyboard_loop
+    cli
+.shell_halt:
+    hlt
+    jmp .shell_halt
 
 screen_clear64:
     push rax
@@ -2521,13 +2501,53 @@ syscall80_handler64:
     je .write
     cmp eax, 2
     je .exit
+    cmp eax, 3
+    je .read_key
     cmp eax, 4
     je .file_read
+    cmp eax, 5
+    je syscall_shell_run_command64
     cmp eax, 7
     je .file_write
     cmp eax, 6
     je .yield
     jmp user_bad_syscall_exit64
+.read_key:
+    push rax
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    sti
+    call poll_keyboard64
+    cli
+    mov [rsp + 112], al
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
 .yield:
     ; Reuse the timer preemption path so a ring-3 task can voluntarily yield.
     ; The IRQ handler saves this kernel syscall context and resumes it later.
@@ -2762,6 +2782,62 @@ user_bad_syscall_exit64:
     sti                         ; exception/syscall gate cleared IF; restore shell IRQs
     ret
 
+syscall_shell_run_command64:
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    jne user_shell_fault_exit64
+    cmp rdi, USER_STACK_VIRT
+    jb user_shell_fault_exit64
+    cmp rsi, 127
+    ja user_shell_fault_exit64
+    mov rax, rdi
+    add rax, rsi
+    jc user_shell_fault_exit64
+    cmp rax, USER_STACK_VIRT + 4096
+    ja user_shell_fault_exit64
+    push rax
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13, rsi
+    lea rdi, [rel line_buffer]
+    mov rsi, r12
+    mov ecx, r13d
+    rep movsb
+    lea rdx, [rel line_buffer]
+    mov byte [rdx + r13], 0
+    mov [rel line_length], r13d
+    call execute_command64
+    mov dword [rel line_length], 0
+    mov byte [rel line_buffer], 0
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
+
 user_task_exit64:
     mov rsi, message_user_exit
     jmp user_task_terminate64
@@ -2774,13 +2850,20 @@ user_task_terminate64:
     call print_string64
     mov al, 10
     call put_char64
-    ; Retire the saved context as well as the runnable state. A later exec
-    ; must enter from a fresh ring-3 frame, never resume a dead process.
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    jne .retire_elf
+    mov qword [rel task_rsp + SHELL_TASK_INDEX*8], 0
+    mov byte [rel task_started + SHELL_TASK_INDEX], 0
+    mov byte [rel shell_process_state], 1
+    jmp .restore_kernel
+.retire_elf:
     mov byte [rel user_process_state], 0
-    mov qword [rel task_rsp + 24], 0
-    mov byte [rel task_started + 3], 0
+    mov qword [rel task_rsp + USER_TASK_INDEX*8], 0
+    mov byte [rel task_started + USER_TASK_INDEX], 0
+.restore_kernel:
     mov eax, PML4_ADDR
     mov cr3, rax
+    mov qword [rel tss64 + 4], TSS_STACK_TOP
     mov byte [rel current_task_index], 0
     mov rsp, [rel task_rsp]
     pop r15
@@ -2824,12 +2907,15 @@ scheduler_init64:
     mov qword [rel task_rsp], 0
     mov qword [rel task_rsp + 8], 0
     mov qword [rel task_rsp + 16], 0
-    mov qword [rel task_rsp + 24], 0
+    mov qword [rel task_rsp + USER_TASK_INDEX*8], 0
+    mov qword [rel task_rsp + SHELL_TASK_INDEX*8], 0
     mov byte [rel task_started], 1
     mov byte [rel task_started + 1], 0
     mov byte [rel task_started + 2], 0
-    mov byte [rel task_started + 3], 0
+    mov byte [rel task_started + USER_TASK_INDEX], 0
+    mov byte [rel task_started + SHELL_TASK_INDEX], 0
     mov byte [rel user_process_state], 0
+    mov byte [rel shell_process_state], 1
     mov byte [rel current_task_index], 0
     ret
 
@@ -2938,26 +3024,45 @@ irq0_handler64:
     mov [rdx + rax*8], rsp
 
     inc al
-    cmp al, 4
+    cmp al, TASK_COUNT
     jb .next_task_ready
     xor al, al
 .next_task_ready:
-    cmp al, 3
-    jne .task_runnable
+    cmp al, USER_TASK_INDEX
+    jne .check_shell
     cmp byte [rel user_process_state], 1
+    je .task_runnable
+    xor al, al
+    jmp .task_runnable
+.check_shell:
+    cmp al, SHELL_TASK_INDEX
+    jne .task_runnable
+    cmp byte [rel shell_process_state], 1
     je .task_runnable
     xor al, al
 .task_runnable:
     mov [rel current_task_index], al
-    movzx r10d, al               ; preserve selected task index across CR3 load
-    cmp r10d, 3
-    jne .kernel_cr3
-    mov rax, [rel user_pml4_page]
-    mov cr3, rax
-    jmp .cr3_ready
-.kernel_cr3:
+    movzx r10d, al
+    cmp r10d, USER_TASK_INDEX
+    je .user_cr3
+    cmp r10d, SHELL_TASK_INDEX
+    je .shell_cr3
     mov eax, PML4_ADDR
     mov cr3, rax
+    mov qword [rel tss64 + 4], TSS_STACK_TOP
+    jmp .cr3_ready
+.user_cr3:
+    mov rax, [rel user_pml4_page]
+    mov cr3, rax
+    mov rax, [rel user_kernel_stack_top]
+    mov [rel tss64 + 4], rax
+    jmp .cr3_ready
+.shell_cr3:
+    mov rax, [rel shell_pml4_page]
+    mov cr3, rax
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
+    jmp .cr3_ready
 .cr3_ready:
     ; A zero saved RSP means this task has never run. Start it on its own stack.
     lea rdx, [rel task_rsp]
@@ -2971,13 +3076,22 @@ irq0_handler64:
     je .start_task_a
     cmp byte [rel current_task_index], 2
     je .start_task_b
-    ; First entry to a user process uses a five-qword CPL3 iret frame.
-    mov rsp, TASK3_STACK_TOP
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    je .start_shell
+    mov rsp, [rel user_kernel_stack_top]
     push qword USER_DATA_SEL
     push qword USER_STACK_TOP
     push qword 0x202
     push qword USER_CODE_SEL
     push qword [rel user_process_entry]
+    iretq
+.start_shell:
+    mov rsp, [rel shell_kernel_stack_top]
+    push qword USER_DATA_SEL
+    push qword USER_STACK_TOP
+    push qword 0x202
+    push qword USER_CODE_SEL
+    push qword USER_CODE_VIRT
     iretq
 .start_task_b:
     mov rsp, TASK2_STACK_TOP
@@ -3040,8 +3154,10 @@ exception_common64:
     mov rax, [rsp + 24]
     test al, 3
     jz .kernel_fault
-    cmp byte [rel current_task_index], 3
+    cmp byte [rel current_task_index], USER_TASK_INDEX
     je user_task_fault_exit64
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    je user_shell_fault_exit64
     jmp user_fault_exit64
 .kernel_fault:
     ; Stubs normalize the stack to [vector, error code, saved RIP, ...].
@@ -3377,9 +3493,9 @@ user_return_rsp dq 0
 user_process_entry dq 0
 user_process_state db 0
 current_task_index db 0
-task_started times 4 db 0
+task_started times TASK_COUNT db 0
 align 8
-task_rsp times 4 dq 0
+task_rsp times TASK_COUNT dq 0
 scheduler_counter_a dq 0
 scheduler_counter_b dq 0
 heap_head dq 0
