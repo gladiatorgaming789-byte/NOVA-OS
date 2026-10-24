@@ -3541,7 +3541,6 @@ user_stack_page dq 0
 user_return_rsp dq 0
 user_process_entry dq 0
 user_process_state db 0
-shell_process_state db 0
 sync_user_test_active db 0
 current_task_index db 0
 task_started times TASK_COUNT db 0
