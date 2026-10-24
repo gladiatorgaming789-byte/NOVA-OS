@@ -3059,25 +3059,6 @@ irq0_handler64:
     inc dword [rel timer_ticks]
     cmp byte [rel sync_user_test_active], 1
     je .sync_return
-.sync_return:
-    mov al, 0x20
-    out 0x20, al
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rdi
-    pop rsi
-    pop rbp
-    pop rbx
-    pop rdx
-    pop rcx
-    pop rax
-    iretq
     movzx eax, byte [rel current_task_index]
     lea rdx, [rel task_rsp]
     mov [rdx + rax*8], rsp
@@ -3170,6 +3151,26 @@ irq0_handler64:
 .resume_task:
     lea rdx, [rel task_rsp]
     mov rsp, [rdx + r10*8]
+    mov al, 0x20
+    out 0x20, al
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
+
+.sync_return:
     mov al, 0x20
     out 0x20, al
     pop r15
