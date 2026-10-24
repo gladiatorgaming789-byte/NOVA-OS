@@ -676,13 +676,13 @@ execute_command64:
     test al, al
     jnz .userfaulttest
     mov rsi, line_buffer
-    mov rdi, command_write_prefix
-    call string_starts_with64    mov rsi, line_buffer
     mov rdi, command_write2_prefix
     call string_starts_with64
     test al, al
     jnz .fs_write2
-
+    mov rsi, line_buffer
+    mov rdi, command_write_prefix
+    call string_starts_with64
     test al, al
     jnz .fs_write
     mov rsi, line_buffer
@@ -1497,6 +1497,48 @@ fs_list64:
     ret
 
 fs_cat64:
+    call fs_read_header64
+    test eax, eax
+    jz .invalid
+    mov ecx, [rel fs_sector_buffer + 8]
+    test ecx, ecx
+    jz .empty
+    push rcx
+    mov eax, FS_DATA_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .disk_error
+    pop rcx
+    mov rsi, message_fs_read
+    call print_string64
+    lea rsi, [rel fs_sector_buffer]
+.cat_print:
+    test ecx, ecx
+    jz .cat_done
+    mov al, [rsi]
+    call put_char64
+    inc rsi
+    dec ecx
+    jmp .cat_print
+.cat_done:
+    mov al, 10
+    call put_char64
+    ret
+.empty:
+    mov rsi, message_fs_empty
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.disk_error:
+    pop rcx
+.invalid:
+    mov rsi, message_fs_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
 
 ; Read the third directory entry, stored in its own sector.
 fs_cat2_64:
@@ -1516,15 +1558,15 @@ fs_cat2_64:
     mov rsi, message_fs_read2
     call print_string64
     lea rsi, [rel fs_sector_buffer]
-.print:
+.cat2_print:
     test ecx, ecx
-    jz .done
+    jz .cat2_done
     mov al, [rsi]
     call put_char64
     inc rsi
     dec ecx
-    jmp .print
-.done:
+    jmp .cat2_print
+.cat2_done:
     mov al, 10
     call put_char64
     ret
@@ -1542,51 +1584,6 @@ fs_cat2_64:
     mov al, 10
     call put_char64
     ret
-
-    call fs_read_header64
-    test eax, eax
-    jz .invalid
-    mov ecx, [rel fs_sector_buffer + 8]
-    test ecx, ecx
-    jz .empty
-    push rcx
-    mov eax, FS_DATA_LBA
-    lea rdi, [rel fs_sector_buffer]
-    call ata_read_sector64
-    test eax, eax
-    jz .disk_error
-    pop rcx
-    mov rsi, message_fs_read
-    call print_string64
-    lea rsi, [rel fs_sector_buffer]
-.print:
-    test ecx, ecx
-    jz .done
-    mov al, [rsi]
-    call put_char64
-    inc rsi
-    dec ecx
-    jmp .print
-.done:
-    mov al, 10
-    call put_char64
-    ret
-.empty:
-    mov rsi, message_fs_empty
-    call print_string64
-    mov al, 10
-    call put_char64
-    ret
-.disk_error:
-    pop rcx
-.invalid:
-    mov rsi, message_fs_invalid
-    call print_string64
-    mov al, 10
-    call put_char64
-    ret
-
-fs_write64:
 
 ; Store a second user text file in directory slot 3 / data sector 3.
 fs_write2_64:
@@ -1605,13 +1602,13 @@ fs_write2_64:
     mov rsi, fs_sector_buffer
     mov rdi, fs_magic
     mov ecx, 7
-.check_signature:
+.write2_signature:
     mov al, [rsi]
     cmp al, [rdi]
     jne .invalid
     inc rsi
     inc rdi
-    loop .check_signature
+    loop .write2_signature
     mov eax, [rel fs_file_size]
     mov [rel fs_sector_buffer + 36], eax
     lea rsi, [rel fs_filename2]
@@ -1660,7 +1657,8 @@ fs_write2_64:
     call put_char64
     ret
 
-    ; Require at least one byte after "write " and keep a sector-sized bound.
+; Write NOVA.TXT while preserving the ELF and second text-file entries.
+fs_write64:
     mov ecx, [rel line_length]
     cmp ecx, 6
     jbe .usage
@@ -1668,7 +1666,6 @@ fs_write2_64:
     cmp ecx, FS_MAX_FILE_SIZE
     ja .usage
     mov [rel fs_file_size], ecx
-    ; If LBA0 is all zero, initialize it; never overwrite unknown media.
     mov eax, FS_SUPER_LBA
     lea rdi, [rel fs_sector_buffer]
     call ata_read_sector64
@@ -1676,25 +1673,25 @@ fs_write2_64:
     jz .disk_error
     mov rsi, fs_sector_buffer
     mov ecx, 512
-.check_blank:
+.write_check_blank:
     cmp byte [rsi], 0
-    jne .check_magic
+    jne .write_check_magic
     inc rsi
-    loop .check_blank
-    jmp .initialize_header
-.check_magic:
+    loop .write_check_blank
+    jmp .write_initialize_header
+.write_check_magic:
     mov rsi, fs_sector_buffer
     mov rdi, fs_magic
     mov ecx, 7
-.check_signature:
+.write_signature:
     mov al, [rsi]
     cmp al, [rdi]
     jne .invalid
     inc rsi
     inc rdi
-    loop .check_signature
-    jmp .update_header
-.initialize_header:
+    loop .write_signature
+    jmp .write_update_header
+.write_initialize_header:
     lea rdi, [rel fs_sector_buffer]
     xor eax, eax
     mov ecx, 64
@@ -1703,7 +1700,7 @@ fs_write2_64:
     lea rdi, [rel fs_sector_buffer]
     mov ecx, 7
     rep movsb
-.update_header:
+.write_update_header:
     mov eax, [rel fs_file_size]
     mov [rel fs_sector_buffer + 8], eax
     lea rsi, [rel fs_filename]
@@ -1715,7 +1712,6 @@ fs_write2_64:
     call ata_write_sector64
     test eax, eax
     jz .disk_error
-    ; Zero the sector, then copy the command payload without its prefix.
     lea rdi, [rel fs_sector_buffer]
     xor eax, eax
     mov ecx, 64
