@@ -3035,7 +3035,7 @@ irq0_handler64:
     jne .check_shell
     cmp byte [rel user_process_state], 1
     je .task_runnable
-    xor al, al
+    mov al, SHELL_TASK_INDEX
     jmp .task_runnable
 .check_shell:
     cmp al, SHELL_TASK_INDEX
