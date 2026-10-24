@@ -2252,6 +2252,213 @@ user_vm_init64:
     mov eax, 1
     ret
 
+shell_vm_init64:
+    cmp qword [rel shell_pml4_page], 0
+    jne .ready
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    xor r14d, r14d
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_pml4_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_pdpt_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_pd_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_code_pt_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_stack_pt_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_code_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_stack_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_kernel_stack_page], rax
+    lea rdx, [rax + 0x1000]
+    mov [rel shell_kernel_stack_top], rdx
+
+    mov rdi, [rel shell_pml4_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_pdpt_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_pd_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_code_pt_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_stack_pt_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_code_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_stack_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_kernel_stack_page]
+    call vm_zero_page64
+
+    ; Copy the kernel's existing identity-map hierarchy.
+    mov rsi, PML4_ADDR
+    mov rdi, [rel shell_pml4_page]
+    mov ecx, 512
+    rep movsq
+    mov rsi, PDPT_ADDR
+    mov rdi, [rel shell_pdpt_page]
+    mov ecx, 512
+    rep movsq
+    mov rsi, PD_ADDR
+    mov rdi, [rel shell_pd_page]
+    mov ecx, 512
+    rep movsq
+
+    mov rax, [rel shell_pdpt_page]
+    or rax, 7
+    mov rdx, [rel shell_pml4_page]
+    mov [rdx], rax
+    mov rax, [rel shell_pd_page]
+    or rax, 7
+    mov rdx, [rel shell_pdpt_page]
+    mov [rdx], rax
+
+    ; Replace the 2 MiB huge-page entries covering 4-6 MiB and 6-8 MiB
+    ; with page tables so user permissions apply only to individual pages.
+    mov rax, [rel shell_code_pt_page]
+    or rax, 7
+    mov rdx, [rel shell_pd_page]
+    mov [rdx + 2*8], rax
+    mov rax, [rel shell_stack_pt_page]
+    or rax, 7
+    mov [rdx + 3*8], rax
+
+    mov rdi, [rel shell_code_pt_page]
+    mov rdx, USER_CODE_VIRT
+    xor ecx, ecx
+.code_pt_loop:
+    mov rax, rdx
+    or rax, 3
+    mov [rdi + rcx*8], rax
+    add rdx, 0x1000
+    inc ecx
+    cmp ecx, 512
+    jb .code_pt_loop
+    mov rax, [rel shell_code_page]
+    or rax, 5                    ; present + user, read-only code page
+    mov rdi, [rel shell_code_pt_page]
+    mov [rdi], rax
+
+    mov rdi, [rel shell_stack_pt_page]
+    mov rdx, USER_STACK_VIRT
+    xor ecx, ecx
+.stack_pt_loop:
+    mov rax, rdx
+    or rax, 3
+    mov [rdi + rcx*8], rax
+    add rdx, 0x1000
+    inc ecx
+    cmp ecx, 512
+    jb .stack_pt_loop
+    mov rax, [rel shell_stack_page]
+    or rax, 7                    ; present + writable + user stack page
+    mov rdi, [rel shell_stack_pt_page]
+    mov [rdi], rax
+
+    mov rdi, [rel shell_code_page]
+    lea rsi, [rel user_shell_program_start]
+    mov ecx, user_shell_program_end - user_shell_program_start
+    rep movsb
+    mov r14d, 1
+    jmp .done
+.fail:
+    xor r14d, r14d
+.done:
+    mov eax, r14d
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+.ready:
+    mov eax, 1
+    ret
+
+; A small ring-3 shell image; command parsing remains in validated kernel syscall 5.
+align 16
+user_shell_program_start:
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_shell_prompt - user_shell_program_start)
+    mov esi, user_shell_prompt_end - user_shell_prompt
+    int 0x80
+    xor r12d, r12d
+.loop:
+    mov eax, 3
+    int 0x80
+    test al, al
+    jz .loop
+    cmp al, 10
+    je .enter
+    cmp al, 8
+    je .backspace
+    cmp r12d, 120
+    jae .loop
+    mov [USER_STACK_VIRT + 0x800 + r12], al
+    mov eax, 1
+    mov rdi, USER_STACK_VIRT + 0x800
+    add rdi, r12
+    mov esi, 1
+    int 0x80
+    inc r12d
+    jmp .loop
+.backspace:
+    test r12d, r12d
+    jz .loop
+    dec r12d
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_shell_backspace - user_shell_program_start)
+    mov esi, user_shell_backspace_end - user_shell_backspace
+    int 0x80
+    jmp .loop
+.enter:
+    mov byte [USER_STACK_VIRT + 0x800 + r12], 0
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_shell_newline - user_shell_program_start)
+    mov esi, 1
+    int 0x80
+    mov eax, 5
+    mov rdi, USER_STACK_VIRT + 0x800
+    mov rsi, r12
+    int 0x80
+    xor r12d, r12d
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_shell_prompt - user_shell_program_start)
+    mov esi, user_shell_prompt_end - user_shell_prompt
+    int 0x80
+    jmp .loop
+user_shell_prompt db 'nova> '
+user_shell_prompt_end:
+user_shell_newline db 10
+user_shell_backspace db 8, ' ', 8
+user_shell_backspace_end:
+user_shell_program_end:
+
 vm_zero_page64:
     push rcx
     push rdi
@@ -3112,6 +3319,8 @@ message_fs_no_disk db 'Storage unavailable: attach a writable IDE data disk.', 0
 message_fs_invalid db 'Storage is unformatted or has an invalid NOVA filesystem header.', 0
 message_fs_empty db 'NOVA.TXT is empty or does not exist.', 0
 message_fs_written db 'Saved NOVA.TXT to persistent storage.', 0
+message_shell_fault db 'User shell faulted; retiring shell task.', 0
+message_shell_vm_failed db 'Unable to initialize protected user shell memory.', 0
 message_fs_written2 db 'Saved NOVA2.TXT to persistent storage.', 0
 message_fs_read2 db 'File NOVA2.TXT: ', 0
 message_fs_write2_usage db 'Usage: write2 <text> (maximum 121 bytes).', 0
@@ -3146,6 +3355,18 @@ timer_ticks dd 0
 free_page_count dd 0
 test_alloc_page dq 0
 user_pml4_page dq 0
+user_kernel_stack_page dq 0
+user_kernel_stack_top dq 0
+shell_pml4_page dq 0
+shell_pdpt_page dq 0
+shell_pd_page dq 0
+shell_code_pt_page dq 0
+shell_stack_pt_page dq 0
+shell_code_page dq 0
+shell_stack_page dq 0
+shell_kernel_stack_page dq 0
+shell_kernel_stack_top dq 0
+shell_process_state db 0
 user_pdpt_page dq 0
 user_pd_page dq 0
 user_code_pt_page dq 0
