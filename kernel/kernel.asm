@@ -2484,6 +2484,9 @@ user_test_run64:
     rep movsb
     mov [rel user_return_rsp], rsp
     mov byte [rel sync_user_test_active], 1
+    ; Nested ring-3 tests must not reuse the shell syscall stack for CPL0 entry.
+    mov rax, [rel user_kernel_stack_top]
+    mov [rel tss64 + 4], rax
     mov rax, [rel user_pml4_page]
     mov cr3, rax
     push qword USER_DATA_SEL
@@ -2767,6 +2770,8 @@ syscall80_handler64:
     jne .exit_kernel_cr3
     mov rax, [rel shell_pml4_page]
     mov cr3, rax
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
     jmp .exit_restore
 .exit_kernel_cr3:
     mov eax, PML4_ADDR
@@ -2794,6 +2799,8 @@ user_bad_syscall_exit64:
     jne .bad_kernel_cr3
     mov rax, [rel shell_pml4_page]
     mov cr3, rax
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
     jmp .bad_restore
 .bad_kernel_cr3:
     mov eax, PML4_ADDR
@@ -2923,6 +2930,8 @@ user_fault_exit64:
     jne .fault_kernel_cr3
     mov rax, [rel shell_pml4_page]
     mov cr3, rax
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
     jmp .fault_restore
 .fault_kernel_cr3:
     mov eax, PML4_ADDR
