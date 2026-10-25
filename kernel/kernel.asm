@@ -2489,6 +2489,12 @@ user_task_test_start64:
     mov r12d, edi
     cmp byte [rel user_process_state], 1
     je .busy
+    mov al, [rel task_state + USER_TASK_INDEX]
+    cmp al, TASK_STOPPED
+    je .state_allows_launch
+    cmp al, TASK_UNUSED
+    jne .busy
+.state_allows_launch:
     call user_vm_init64
     test eax, eax
     jz .failed
@@ -3232,29 +3238,24 @@ irq0_handler64:
     jne .state_saved
     mov byte [rdx + rax], TASK_READY
 .state_saved:
+    ; Scan the other task slots in round-robin order. A slot is eligible
+    ; only when its canonical lifecycle state is READY; UNUSED and STOPPED
+    ; contexts must never be selected just because their index was next.
+    mov r11d, TASK_COUNT
+.next_task_ready:
     inc al
     cmp al, TASK_COUNT
-    jb .next_task_ready
-    xor al, al
-.next_task_ready:
-    ; Task slot 0 is no longer an active context: the ring-3 shell is task 4.
-    ; Skip slot 0 so the scheduler can always rotate among worker/user tasks.
-    test al, al
-    jnz .check_user
+    jb .candidate_index_ready
     mov al, 1
-.check_user:
-    cmp al, USER_TASK_INDEX
-    jne .check_shell
-    cmp byte [rel user_process_state], 1
+.candidate_index_ready:
+    movzx r10d, al
+    lea rdx, [rel task_state]
+    cmp byte [rdx + r10], TASK_READY
     je .task_runnable
+    dec r11d
+    jnz .next_task_ready
+    ; The shell is the recovery context if no other slot is runnable.
     mov al, SHELL_TASK_INDEX
-    jmp .task_runnable
-.check_shell:
-    cmp al, SHELL_TASK_INDEX
-    jne .task_runnable
-    cmp byte [rel shell_process_state], 1
-    je .task_runnable
-    mov al, 1
 .task_runnable:
     mov [rel current_task_index], al
     movzx r10d, al
