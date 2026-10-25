@@ -15,6 +15,10 @@ TSS_STACK_TOP equ 0x8E000
 USER_TASK_INDEX equ 3
 SHELL_TASK_INDEX equ 4
 TASK_COUNT equ 5
+TASK_UNUSED equ 0
+TASK_READY equ 1
+TASK_RUNNING equ 2
+TASK_STOPPED equ 3
 USER_CODE_VIRT equ 0x400000
 USER_STACK_VIRT equ 0x600000
 USER_STACK_TOP equ 0x600FF0
@@ -1197,6 +1201,7 @@ fs_exec64:
     mov qword [rel task_rsp + 24], 0
     mov byte [rel task_started + 3], 0
     mov byte [rel user_process_state], 1
+    mov byte [rel task_state + USER_TASK_INDEX], TASK_READY
     mov rsi, message_fs_exec_started
     call print_string64
     mov al, 10
@@ -2490,6 +2495,7 @@ user_task_test_start64:
     mov qword [rel task_rsp + USER_TASK_INDEX*8], 0
     mov byte [rel task_started + USER_TASK_INDEX], 0
     mov byte [rel user_process_state], 1
+    mov byte [rel task_state + USER_TASK_INDEX], TASK_READY
     mov rsi, message_user_task_scheduled
     call print_string64
     mov al, 10
@@ -2993,6 +2999,7 @@ user_task_terminate64:
     je .restart_shell
     ; Retire the ELF/test process and resume the shell's saved preemption frame.
     mov byte [rel user_process_state], 0
+    mov byte [rel task_state + USER_TASK_INDEX], TASK_STOPPED
     mov qword [rel task_rsp + USER_TASK_INDEX*8], 0
     mov byte [rel task_started + USER_TASK_INDEX], 0
     mov byte [rel current_task_index], SHELL_TASK_INDEX
@@ -3025,6 +3032,7 @@ user_task_terminate64:
 .no_shell_context:
     ; Defensive fallback: restart the user shell if no preemption frame exists.
     mov byte [rel shell_process_state], 1
+    mov byte [rel task_state + SHELL_TASK_INDEX], TASK_RUNNING
     mov rsp, [rel shell_kernel_stack_top]
     push qword USER_DATA_SEL
     push qword USER_STACK_TOP
@@ -3036,6 +3044,7 @@ user_task_terminate64:
     mov qword [rel task_rsp + SHELL_TASK_INDEX*8], 0
     mov byte [rel task_started + SHELL_TASK_INDEX], 0
     mov byte [rel shell_process_state], 1
+    mov byte [rel task_state + SHELL_TASK_INDEX], TASK_RUNNING
     mov byte [rel current_task_index], SHELL_TASK_INDEX
     mov rax, [rel shell_pml4_page]
     mov cr3, rax
@@ -3092,6 +3101,11 @@ scheduler_init64:
     mov byte [rel task_started + SHELL_TASK_INDEX], 0
     mov byte [rel user_process_state], 0
     mov byte [rel shell_process_state], 1
+    mov byte [rel task_state], TASK_UNUSED
+    mov byte [rel task_state + 1], TASK_READY
+    mov byte [rel task_state + 2], TASK_READY
+    mov byte [rel task_state + USER_TASK_INDEX], TASK_STOPPED
+    mov byte [rel task_state + SHELL_TASK_INDEX], TASK_READY
     mov byte [rel current_task_index], 0
     ret
 
@@ -3200,7 +3214,11 @@ irq0_handler64:
     movzx eax, byte [rel current_task_index]
     lea rdx, [rel task_rsp]
     mov [rdx + rax*8], rsp
-
+    lea rdx, [rel task_state]
+    cmp byte [rdx + rax], TASK_RUNNING
+    jne .state_saved
+    mov byte [rdx + rax], TASK_READY
+.state_saved:
     inc al
     cmp al, TASK_COUNT
     jb .next_task_ready
@@ -3227,6 +3245,8 @@ irq0_handler64:
 .task_runnable:
     mov [rel current_task_index], al
     movzx r10d, al
+    lea rdx, [rel task_state]
+    mov byte [rdx + r10], TASK_RUNNING
     cmp r10d, USER_TASK_INDEX
     je .user_cr3
     cmp r10d, SHELL_TASK_INDEX
@@ -3709,6 +3729,7 @@ user_process_state db 0
 sync_user_test_active db 0
 current_task_index db 0
 task_started times TASK_COUNT db 0
+task_state times TASK_COUNT db TASK_UNUSED
 align 8
 task_rsp times TASK_COUNT dq 0
 scheduler_counter_a dq 0
