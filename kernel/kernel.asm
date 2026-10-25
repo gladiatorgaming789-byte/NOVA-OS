@@ -1216,8 +1216,8 @@ fs_exec64:
     mov rcx, r14
     rep movsb
     mov [rel user_process_entry], r13
-    mov qword [rel task_rsp + 24], 0
-    mov byte [rel task_started + 3], 0
+    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
     mov byte [rel user_process_state], 1
     mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
     mov rsi, message_fs_exec_started
