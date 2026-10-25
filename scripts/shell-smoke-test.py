@@ -383,7 +383,7 @@ def main() -> int:
 
                 shell_cr3_pattern = re.escape(
                     b"Task 4 address-space root (0=none): 0x"
-                ) + rb"[0-9A-F]{16}"
+                ) + rb"[0-9A-F]{8}"
                 run_command(
                     ("p", "s", "ret"),
                     shell_cr3_pattern,
