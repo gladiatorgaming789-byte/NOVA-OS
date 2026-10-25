@@ -3015,6 +3015,7 @@ user_task_terminate64:
     mov qword [rel task_rsp + USER_TASK_INDEX*8], 0
     mov byte [rel task_started + USER_TASK_INDEX], 0
     mov byte [rel current_task_index], SHELL_TASK_INDEX
+    mov byte [rel task_state + SHELL_TASK_INDEX], TASK_RUNNING
     mov rax, [rel shell_pml4_page]
     mov cr3, rax
     mov rax, [rel shell_kernel_stack_top]
