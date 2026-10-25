@@ -912,6 +912,18 @@ execute_command64:
     call print_hex32
     mov al, 10
     call put_char64
+    mov rsi, message_ps_user_cr3
+    call print_string64
+    mov rax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_CR3_OFFSET]
+    call print_hex64
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_shell_cr3
+    call print_string64
+    mov rax, [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_CR3_OFFSET]
+    call print_hex64
+    mov al, 10
+    call put_char64
     jmp .done
 .schedtest:
     cmp qword [rel scheduler_counter_a], 0
@@ -2248,6 +2260,8 @@ user_vm_init64:
     mov rdi, [rel user_stack_pt_page]
     mov [rdi], rax
 
+    mov rax, [rel user_pml4_page]
+    mov [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_CR3_OFFSET], rax
     mov r14d, 1
     jmp .done
 .fail:
@@ -2399,6 +2413,8 @@ shell_vm_init64:
     lea rsi, [rel user_shell_program_start]
     mov ecx, user_shell_program_end - user_shell_program_start
     rep movsb
+    mov rax, [rel shell_pml4_page]
+    mov [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_CR3_OFFSET], rax
     mov r14d, 1
     jmp .done
 .fail:
@@ -3005,6 +3021,7 @@ user_vm_cleanup64:
     call pmm_free_page64
     mov qword [rel user_pdpt_page], 0
 .free_pml4:
+    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_CR3_OFFSET], 0
     mov rdi, [rel user_pml4_page]
     test rdi, rdi
     jz .clear_entry
@@ -3689,6 +3706,8 @@ message_ps_worker_b db 'Task 2: worker-b iterations: 0x', 0
 message_ps_user db 'Task 3: user ELF state (0=stopped, 1=runnable): 0x', 0
 message_ps_user_lifecycle db 'Task 3 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x', 0
 message_ps_shell_lifecycle db 'Task 4 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x', 0
+message_ps_user_cr3 db 'Task 3 address-space root (0=none): 0x', 0
+message_ps_shell_cr3 db 'Task 4 address-space root (0=none): 0x', 0
 message_uservm_failed db 'User VM setup failed: no physical pages available.', 0
 message_user_exit db 'Ring-3 program exited through syscall.', 0
 message_user_fault db 'User process faulted; terminated safely.', 0
