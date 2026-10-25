@@ -894,6 +894,18 @@ execute_command64:
     call print_hex32
     mov al, 10
     call put_char64
+    mov rsi, message_ps_user_lifecycle
+    call print_string64
+    movzx eax, byte [rel task_state + USER_TASK_INDEX]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_shell_lifecycle
+    call print_string64
+    movzx eax, byte [rel task_state + SHELL_TASK_INDEX]
+    call print_hex32
+    mov al, 10
+    call put_char64
     jmp .done
 .schedtest:
     cmp qword [rel scheduler_counter_a], 0
@@ -3659,6 +3671,8 @@ message_ps_foreground db 'Task 0: foreground shell / user-program context', 0
 message_ps_worker_a db 'Task 1: worker-a iterations: 0x', 0
 message_ps_worker_b db 'Task 2: worker-b iterations: 0x', 0
 message_ps_user db 'Task 3: user ELF state (0=stopped, 1=runnable): 0x', 0
+message_ps_user_lifecycle db 'Task 3 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x', 0
+message_ps_shell_lifecycle db 'Task 4 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x', 0
 message_uservm_failed db 'User VM setup failed: no physical pages available.', 0
 message_user_exit db 'Ring-3 program exited through syscall.', 0
 message_user_fault db 'User process faulted; terminated safely.', 0
