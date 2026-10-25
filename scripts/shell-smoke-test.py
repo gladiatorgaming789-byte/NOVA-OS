@@ -358,6 +358,20 @@ def main() -> int:
                     previous_count=0,
                 )
 
+                # A stopped task must not be scheduled. Repeatedly allow timer
+                # preemption to run, then inspect the lifecycle state; it must
+                # remain STOPPED until an explicit launch changes it to READY.
+                for iteration in range(3):
+                    previous_stopped_count = len(
+                        re.findall(lifecycle_stopped_pattern, output())
+                    )
+                    run_command(
+                        ("p", "s", "ret"),
+                        lifecycle_stopped_pattern,
+                        f"stopped-task scheduler exclusion {iteration + 1}",
+                        previous_count=previous_stopped_count,
+                    )
+
                 # A stopped process must be restartable in the same boot.
                 # This catches stale saved-RSP/context bugs that a reboot hides.
                 previous_file_reads = len(re.findall(payload_pattern, output()))
