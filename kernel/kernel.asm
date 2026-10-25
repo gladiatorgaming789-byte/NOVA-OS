@@ -19,6 +19,12 @@ TASK_UNUSED equ 0
 TASK_READY equ 1
 TASK_RUNNING equ 2
 TASK_STOPPED equ 3
+; Per-task control block (TCB) layout shared by scheduler and process manager.
+TASK_STATE_OFFSET equ 0
+TASK_STARTED_OFFSET equ 1
+TASK_SAVED_RSP_OFFSET equ 8
+TASK_CR3_OFFSET equ 16
+TASK_RECORD_SIZE equ 24
 USER_CODE_VIRT equ 0x400000
 USER_STACK_VIRT equ 0x600000
 USER_STACK_TOP equ 0x600FF0
@@ -896,13 +902,13 @@ execute_command64:
     call put_char64
     mov rsi, message_ps_user_lifecycle
     call print_string64
-    movzx eax, byte [rel task_state + USER_TASK_INDEX]
+    movzx eax, byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET]
     call print_hex32
     mov al, 10
     call put_char64
     mov rsi, message_ps_shell_lifecycle
     call print_string64
-    movzx eax, byte [rel task_state + SHELL_TASK_INDEX]
+    movzx eax, byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET]
     call print_hex32
     mov al, 10
     call put_char64
@@ -1213,7 +1219,7 @@ fs_exec64:
     mov qword [rel task_rsp + 24], 0
     mov byte [rel task_started + 3], 0
     mov byte [rel user_process_state], 1
-    mov byte [rel task_state + USER_TASK_INDEX], TASK_READY
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
     mov rsi, message_fs_exec_started
     call print_string64
     mov al, 10
@@ -2489,7 +2495,7 @@ user_task_test_start64:
     mov r12d, edi
     cmp byte [rel user_process_state], 1
     je .busy
-    mov al, [rel task_state + USER_TASK_INDEX]
+    mov al, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET]
     cmp al, TASK_STOPPED
     je .state_allows_launch
     cmp al, TASK_UNUSED
@@ -2510,10 +2516,10 @@ user_task_test_start64:
 .copy:
     rep movsb
     mov qword [rel user_process_entry], USER_CODE_VIRT
-    mov qword [rel task_rsp + USER_TASK_INDEX*8], 0
-    mov byte [rel task_started + USER_TASK_INDEX], 0
+    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
     mov byte [rel user_process_state], 1
-    mov byte [rel task_state + USER_TASK_INDEX], TASK_READY
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
     mov rsi, message_user_task_scheduled
     call print_string64
     mov al, 10
@@ -3017,11 +3023,11 @@ user_task_terminate64:
     je .restart_shell
     ; Retire the ELF/test process and resume the shell's saved preemption frame.
     mov byte [rel user_process_state], 0
-    mov byte [rel task_state + USER_TASK_INDEX], TASK_STOPPED
-    mov qword [rel task_rsp + USER_TASK_INDEX*8], 0
-    mov byte [rel task_started + USER_TASK_INDEX], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_STOPPED
+    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
     mov byte [rel current_task_index], SHELL_TASK_INDEX
-    mov byte [rel task_state + SHELL_TASK_INDEX], TASK_RUNNING
+    mov byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_RUNNING
     mov rax, [rel shell_pml4_page]
     mov cr3, rax
     mov rax, [rel shell_kernel_stack_top]
@@ -3029,7 +3035,7 @@ user_task_terminate64:
     ; We are now on the kernel's shared identity map, not the retired user CR3.
     ; Reclaim the process's seven owned pages before restoring the shell frame.
     call user_vm_cleanup64
-    mov rsp, [rel task_rsp + SHELL_TASK_INDEX*8]
+    mov rsp, [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET]
     test rsp, rsp
     jz .no_shell_context
     pop r15
@@ -3051,7 +3057,7 @@ user_task_terminate64:
 .no_shell_context:
     ; Defensive fallback: restart the user shell if no preemption frame exists.
     mov byte [rel shell_process_state], 1
-    mov byte [rel task_state + SHELL_TASK_INDEX], TASK_RUNNING
+    mov byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_RUNNING
     mov rsp, [rel shell_kernel_stack_top]
     push qword USER_DATA_SEL
     push qword USER_STACK_TOP
@@ -3060,10 +3066,10 @@ user_task_terminate64:
     push qword USER_CODE_VIRT
     iretq
 .restart_shell:
-    mov qword [rel task_rsp + SHELL_TASK_INDEX*8], 0
-    mov byte [rel task_started + SHELL_TASK_INDEX], 0
+    mov qword [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
     mov byte [rel shell_process_state], 1
-    mov byte [rel task_state + SHELL_TASK_INDEX], TASK_RUNNING
+    mov byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_RUNNING
     mov byte [rel current_task_index], SHELL_TASK_INDEX
     mov rax, [rel shell_pml4_page]
     mov cr3, rax
@@ -3108,23 +3114,23 @@ user_fault_exit64:
 ; kernel shell context. Tasks 1 and 2 are independent workers that validate
 ; PIT-driven context switching. Their stacks use reserved, unused low memory.
 scheduler_init64:
-    mov qword [rel task_rsp], 0
-    mov qword [rel task_rsp + 8], 0
-    mov qword [rel task_rsp + 16], 0
-    mov qword [rel task_rsp + USER_TASK_INDEX*8], 0
-    mov qword [rel task_rsp + SHELL_TASK_INDEX*8], 0
-    mov byte [rel task_started], 1
-    mov byte [rel task_started + 1], 0
-    mov byte [rel task_started + 2], 0
-    mov byte [rel task_started + USER_TASK_INDEX], 0
-    mov byte [rel task_started + SHELL_TASK_INDEX], 0
+    mov qword [rel task_records + TASK_SAVED_RSP_OFFSET], 0
+    mov qword [rel task_records + TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov qword [rel task_records + 2*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov qword [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov byte [rel task_records + TASK_STARTED_OFFSET], 1
+    mov byte [rel task_records + TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    mov byte [rel task_records + 2*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    mov byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
     mov byte [rel user_process_state], 0
     mov byte [rel shell_process_state], 1
-    mov byte [rel task_state], TASK_UNUSED
-    mov byte [rel task_state + 1], TASK_READY
-    mov byte [rel task_state + 2], TASK_READY
-    mov byte [rel task_state + USER_TASK_INDEX], TASK_STOPPED
-    mov byte [rel task_state + SHELL_TASK_INDEX], TASK_READY
+    mov byte [rel task_records + TASK_STATE_OFFSET], TASK_UNUSED
+    mov byte [rel task_records + TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
+    mov byte [rel task_records + 2*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_STOPPED
+    mov byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
     mov byte [rel current_task_index], 0
     ret
 
@@ -3231,13 +3237,14 @@ irq0_handler64:
     cmp byte [rel sync_user_test_active], 1
     je .sync_return
     movzx eax, byte [rel current_task_index]
-    lea rdx, [rel task_rsp]
-    mov [rdx + rax*8], rsp
-    lea rdx, [rel task_state]
-    cmp byte [rdx + rax], TASK_RUNNING
+    imul rax, TASK_RECORD_SIZE
+    lea rdx, [rel task_records]
+    mov [rdx + rax + TASK_SAVED_RSP_OFFSET], rsp
+    cmp byte [rdx + rax + TASK_STATE_OFFSET], TASK_RUNNING
     jne .state_saved
-    mov byte [rdx + rax], TASK_READY
+    mov byte [rdx + rax + TASK_STATE_OFFSET], TASK_READY
 .state_saved:
+    movzx eax, byte [rel current_task_index]
     ; Scan the other task slots in round-robin order. A slot is eligible
     ; only when its canonical lifecycle state is READY; UNUSED and STOPPED
     ; contexts must never be selected just because their index was next.
@@ -3249,8 +3256,10 @@ irq0_handler64:
     mov al, 1
 .candidate_index_ready:
     movzx r10d, al
-    lea rdx, [rel task_state]
-    cmp byte [rdx + r10], TASK_READY
+    mov r9d, r10d
+    imul r9, TASK_RECORD_SIZE
+    lea rdx, [rel task_records]
+    cmp byte [rdx + r9 + TASK_STATE_OFFSET], TASK_READY
     je .task_runnable
     dec r11d
     jnz .next_task_ready
@@ -3259,8 +3268,10 @@ irq0_handler64:
 .task_runnable:
     mov [rel current_task_index], al
     movzx r10d, al
-    lea rdx, [rel task_state]
-    mov byte [rdx + r10], TASK_RUNNING
+    mov r9d, r10d
+    imul r9, TASK_RECORD_SIZE
+    lea rdx, [rel task_records]
+    mov byte [rdx + r9 + TASK_STATE_OFFSET], TASK_RUNNING
     cmp r10d, USER_TASK_INDEX
     je .user_cr3
     cmp r10d, SHELL_TASK_INDEX
@@ -3282,11 +3293,12 @@ irq0_handler64:
     jmp .cr3_ready
 .cr3_ready:
     ; A zero saved RSP means this task has never run. Start it on its own stack.
-    lea rdx, [rel task_rsp]
-    cmp qword [rdx + r10*8], 0
+    mov r9d, r10d
+    imul r9, TASK_RECORD_SIZE
+    lea rdx, [rel task_records]
+    cmp qword [rdx + r9 + TASK_SAVED_RSP_OFFSET], 0
     jne .resume_task
-    lea rdx, [rel task_started]
-    mov byte [rdx + r10], 1
+    mov byte [rdx + r9 + TASK_STARTED_OFFSET], 1
     mov al, 0x20
     out 0x20, al
     cmp byte [rel current_task_index], USER_TASK_INDEX
@@ -3327,8 +3339,10 @@ irq0_handler64:
     jmp scheduler_worker_a64
 
 .resume_task:
-    lea rdx, [rel task_rsp]
-    mov rsp, [rdx + r10*8]
+    mov r9d, r10d
+    imul r9, TASK_RECORD_SIZE
+    lea rdx, [rel task_records]
+    mov rsp, [rdx + r9 + TASK_SAVED_RSP_OFFSET]
     mov al, 0x20
     out 0x20, al
     pop r15
@@ -3744,10 +3758,11 @@ user_process_entry dq 0
 user_process_state db 0
 sync_user_test_active db 0
 current_task_index db 0
-task_started times TASK_COUNT db 0
-task_state times TASK_COUNT db TASK_UNUSED
 align 8
-task_rsp times TASK_COUNT dq 0
+; Stable slot index -> one record containing lifecycle, first-run marker,
+; saved interrupt context, and CR3 metadata. Address-space page ownership is
+; still allocated by the existing single-user-process manager.
+task_records times TASK_COUNT*TASK_RECORD_SIZE db 0
 scheduler_counter_a dq 0
 scheduler_counter_b dq 0
 heap_head dq 0
