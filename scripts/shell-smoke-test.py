@@ -348,6 +348,15 @@ def main() -> int:
                 )
                 run_command(("p", "s", "ret"), ps_stopped_pattern,
                             "user process state after exit", previous_count=1)
+                lifecycle_stopped_pattern = re.escape(
+                    b"Task 3 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x00000003"
+                )
+                run_command(
+                    ("p", "s", "ret"),
+                    lifecycle_stopped_pattern,
+                    "canonical process lifecycle after exit",
+                    previous_count=0,
+                )
 
                 # A stopped process must be restartable in the same boot.
                 # This catches stale saved-RSP/context bugs that a reboot hides.
