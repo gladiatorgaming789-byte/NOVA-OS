@@ -915,7 +915,7 @@ execute_command64:
     mov rsi, message_ps_user_cr3
     call print_string64
     mov rax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_CR3_OFFSET]
-    call print_hex64
+    call print_hex32
     mov al, 10
     call put_char64
     mov rsi, message_ps_shell_cr3
