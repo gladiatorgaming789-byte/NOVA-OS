@@ -203,6 +203,49 @@ def main() -> int:
             )
             print("User fault isolation and shell recovery passed.")
 
+            # Repeat the supervisor-page write violation. This is stronger
+            # than a single crash check: every fault must retire the task,
+            # reclaim its address-space pages, and leave the shell schedulable.
+            baseline_data = run_command(
+                ("m", "e", "m", "o", "r", "y", "ret"),
+                free_pages_pattern,
+                "baseline physical-page count before fault stress",
+            )
+            baseline_matches = re.findall(free_pages_pattern, baseline_data)
+            if not baseline_matches:
+                raise RuntimeError("memory command omitted the baseline page count")
+            fault_baseline_pages = int(baseline_matches[-1], 16)
+            for iteration in range(8):
+                previous_fault_count = len(re.findall(user_fault_pattern, output()))
+                run_command(
+                    ("u", "s", "e", "r", "f", "a", "u", "l", "t", "t", "e", "s", "t", "ret"),
+                    user_fault_pattern,
+                    f"ring-3 supervisor-page protection test {iteration + 1}",
+                    previous_count=previous_fault_count,
+                    timeout=6,
+                )
+                previous_help_count = len(re.findall(help_pattern, output()))
+                run_command(
+                    ("h", "e", "l", "p", "ret"),
+                    help_pattern,
+                    f"shell recovery after protection test {iteration + 1}",
+                    previous_count=previous_help_count,
+                    timeout=6,
+                )
+            final_data = run_command(
+                ("m", "e", "m", "o", "r", "y", "ret"),
+                free_pages_pattern,
+                "physical-page count after fault stress",
+            )
+            final_matches = re.findall(free_pages_pattern, final_data)
+            fault_final_pages = int(final_matches[-1], 16) if final_matches else -1
+            if fault_final_pages != fault_baseline_pages:
+                raise RuntimeError(
+                    "ring-3 protection-fault stress leaked physical pages: "
+                    f"baseline={fault_baseline_pages}, final={fault_final_pages}"
+                )
+            print("Eight protection faults recovered safely without page leaks.")
+
             if data_disk is not None:
                 write_pattern = re.escape(b"Saved NOVA.TXT to persistent storage.")
                 run_command(
