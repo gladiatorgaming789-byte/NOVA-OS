@@ -348,6 +348,15 @@ def main() -> int:
                 )
                 run_command(("p", "s", "ret"), ps_stopped_pattern,
                             "user process state after exit", previous_count=1)
+                no_user_cr3_pattern = re.escape(
+                    b"Task 3 address-space root (0=none): 0x0000000000000000"
+                )
+                run_command(
+                    ("p", "s", "ret"),
+                    no_user_cr3_pattern,
+                    "user address-space root cleared after exit",
+                    previous_count=0,
+                )
                 lifecycle_stopped_pattern = re.escape(
                     b"Task 3 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x00000003"
                 )
@@ -371,6 +380,16 @@ def main() -> int:
                         f"stopped-task scheduler exclusion {iteration + 1}",
                         previous_count=previous_stopped_count,
                     )
+
+                shell_cr3_pattern = re.escape(
+                    b"Task 4 address-space root (0=none): 0x"
+                ) + rb"[0-9A-F]{16}"
+                run_command(
+                    ("p", "s", "ret"),
+                    shell_cr3_pattern,
+                    "shell address-space root remains recorded",
+                    previous_count=0,
+                )
 
                 # A stopped process must be restartable in the same boot.
                 # This catches stale saved-RSP/context bugs that a reboot hides.
