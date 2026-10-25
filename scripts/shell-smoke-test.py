@@ -349,7 +349,7 @@ def main() -> int:
                 run_command(("p", "s", "ret"), ps_stopped_pattern,
                             "user process state after exit", previous_count=1)
                 no_user_cr3_pattern = re.escape(
-                    b"Task 3 address-space root (0=none): 0x0000000000000000"
+                    b"Task 3 address-space root (0=none): 0x00000000"
                 )
                 run_command(
                     ("p", "s", "ret"),
