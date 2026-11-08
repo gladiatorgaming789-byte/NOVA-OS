@@ -2150,7 +2150,11 @@ tss_init64:
 ; remains identity-mapped supervisor-only; only the selected code and stack
 ; PTEs receive the user bit. This first address space is intentionally small.
 user_vm_init64:
-    cmp qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PML4_OFFSET], 0
+    mov edi, USER_TASK_INDEX
+    jmp task_vm_init64
+
+task_vm_init64:
+    cmp qword [rel task_records + r15 + TASK_VM_PML4_OFFSET], 0
     jne .ready
     push rbx
     push rbp
@@ -2158,85 +2162,88 @@ user_vm_init64:
     push r13
     push r14
     push r15
+    movzx eax, dil
+    imul rax, TASK_RECORD_SIZE
+    mov r15, rax
     xor r14d, r14d
     call pmm_alloc_page64
     test rax, rax
     jz .fail
-    mov [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PML4_OFFSET], rax
+    mov [rel task_records + r15 + TASK_VM_PML4_OFFSET], rax
     call pmm_alloc_page64
     test rax, rax
     jz .fail
-    mov [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PDPT_OFFSET], rax
+    mov [rel task_records + r15 + TASK_VM_PDPT_OFFSET], rax
     call pmm_alloc_page64
     test rax, rax
     jz .fail
-    mov [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PD_OFFSET], rax
+    mov [rel task_records + r15 + TASK_VM_PD_OFFSET], rax
     call pmm_alloc_page64
     test rax, rax
     jz .fail
-    mov [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PT_OFFSET], rax
+    mov [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET], rax
     call pmm_alloc_page64
     test rax, rax
     jz .fail
-    mov [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_STACK_PT_OFFSET], rax
+    mov [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET], rax
     call pmm_alloc_page64
     test rax, rax
     jz .fail
-    mov [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PAGE_OFFSET], rax
+    mov [rel task_records + r15 + TASK_VM_CODE_PAGE_OFFSET], rax
     call pmm_alloc_page64
     test rax, rax
     jz .fail
-    mov [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_STACK_PAGE_OFFSET], rax
+    mov [rel task_records + r15 + TASK_VM_STACK_PAGE_OFFSET], rax
 
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PML4_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_PML4_OFFSET]
     call vm_zero_page64
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PDPT_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_PDPT_OFFSET]
     call vm_zero_page64
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PD_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_PD_OFFSET]
     call vm_zero_page64
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PT_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET]
     call vm_zero_page64
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_STACK_PT_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET]
     call vm_zero_page64
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PAGE_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_CODE_PAGE_OFFSET]
     call vm_zero_page64
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_STACK_PAGE_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_STACK_PAGE_OFFSET]
     call vm_zero_page64
 
     ; Copy the kernel's existing identity-map hierarchy.
     mov rsi, PML4_ADDR
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PML4_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_PML4_OFFSET]
     mov ecx, 512
     rep movsq
     mov rsi, PDPT_ADDR
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PDPT_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_PDPT_OFFSET]
     mov ecx, 512
     rep movsq
     mov rsi, PD_ADDR
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PD_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_PD_OFFSET]
     mov ecx, 512
     rep movsq
 
-    mov rax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PDPT_OFFSET]
+    mov rax, [rel task_records + r15 + TASK_VM_PDPT_OFFSET]
     or rax, 7
-    mov rdx, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PML4_OFFSET]
+    mov rdx, [rel task_records + r15 + TASK_VM_PML4_OFFSET]
     mov [rdx], rax
-    mov rax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PD_OFFSET]
+    mov rax, [rel task_records + r15 + TASK_VM_PD_OFFSET]
     or rax, 7
-    mov rdx, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PDPT_OFFSET]
+    mov rdx, [rel task_records + r15 + TASK_VM_PDPT_OFFSET]
     mov [rdx], rax
 
     ; Replace the 2 MiB huge-page entries covering 4-6 MiB and 6-8 MiB
     ; with page tables so user permissions apply only to individual pages.
-    mov rax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PT_OFFSET]
+    mov rax, [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET]
     or rax, 7
-    mov rdx, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PD_OFFSET]
+    mov rdx, [rel task_records + r15 + TASK_VM_PD_OFFSET]
     mov [rdx + 2*8], rax
-    mov rax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_STACK_PT_OFFSET]
+    mov rax, [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET]
     or rax, 7
     mov [rdx + 3*8], rax
 
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PT_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET]
     mov rdx, USER_CODE_VIRT
     xor ecx, ecx
 .code_pt_loop:
@@ -2247,12 +2254,12 @@ user_vm_init64:
     inc ecx
     cmp ecx, 512
     jb .code_pt_loop
-    mov rax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PAGE_OFFSET]
+    mov rax, [rel task_records + r15 + TASK_VM_CODE_PAGE_OFFSET]
     or rax, 5                    ; present + user, read-only code page
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PT_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET]
     mov [rdi], rax
 
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_STACK_PT_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET]
     mov rdx, USER_STACK_VIRT
     xor ecx, ecx
 .stack_pt_loop:
@@ -2263,13 +2270,13 @@ user_vm_init64:
     inc ecx
     cmp ecx, 512
     jb .stack_pt_loop
-    mov rax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_STACK_PAGE_OFFSET]
+    mov rax, [rel task_records + r15 + TASK_VM_STACK_PAGE_OFFSET]
     or rax, 7                    ; present + writable + user stack page
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_STACK_PT_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET]
     mov [rdi], rax
 
-    mov rax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PML4_OFFSET]
-    mov [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_CR3_OFFSET], rax
+    mov rax, [rel task_records + r15 + TASK_VM_PML4_OFFSET]
+    mov [rel task_records + r15 + TASK_CR3_OFFSET], rax
     mov r14d, 1
     jmp .done
 .fail:
@@ -2992,51 +2999,60 @@ user_task_bad_syscall_exit64:
 ; called only with a kernel page table active, both for failed setup rollback
 ; and after a task has switched away from its user CR3.
 user_vm_cleanup64:
+    mov edi, USER_TASK_INDEX
+    jmp task_vm_cleanup64
+
+task_vm_cleanup64:
     push rbx
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PAGE_OFFSET]
+    push r15
+    movzx eax, dil
+    imul rax, TASK_RECORD_SIZE
+    mov r15, rax
+    mov rdi, [rel task_records + r15 + TASK_VM_CODE_PAGE_OFFSET]
     test rdi, rdi
     jz .free_stack
     call pmm_free_page64
-    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PAGE_OFFSET], 0
+    mov qword [rel task_records + r15 + TASK_VM_CODE_PAGE_OFFSET], 0
 .free_stack:
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_STACK_PAGE_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_STACK_PAGE_OFFSET]
     test rdi, rdi
     jz .free_code_pt
     call pmm_free_page64
-    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_STACK_PAGE_OFFSET], 0
+    mov qword [rel task_records + r15 + TASK_VM_STACK_PAGE_OFFSET], 0
 .free_code_pt:
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PT_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET]
     test rdi, rdi
     jz .free_stack_pt
     call pmm_free_page64
-    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PT_OFFSET], 0
+    mov qword [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET], 0
 .free_stack_pt:
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_STACK_PT_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET]
     test rdi, rdi
     jz .free_pd
     call pmm_free_page64
-    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_STACK_PT_OFFSET], 0
+    mov qword [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET], 0
 .free_pd:
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PD_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_PD_OFFSET]
     test rdi, rdi
     jz .free_pdpt
     call pmm_free_page64
-    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PD_OFFSET], 0
+    mov qword [rel task_records + r15 + TASK_VM_PD_OFFSET], 0
 .free_pdpt:
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PDPT_OFFSET]
+    mov rdi, [rel task_records + r15 + TASK_VM_PDPT_OFFSET]
     test rdi, rdi
     jz .free_pml4
     call pmm_free_page64
-    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PDPT_OFFSET], 0
+    mov qword [rel task_records + r15 + TASK_VM_PDPT_OFFSET], 0
 .free_pml4:
-    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_CR3_OFFSET], 0
-    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PML4_OFFSET]
+    mov qword [rel task_records + r15 + TASK_CR3_OFFSET], 0
+    mov rdi, [rel task_records + r15 + TASK_VM_PML4_OFFSET]
     test rdi, rdi
     jz .clear_entry
     call pmm_free_page64
-    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PML4_OFFSET], 0
+    mov qword [rel task_records + r15 + TASK_VM_PML4_OFFSET], 0
 .clear_entry:
     mov qword [rel user_process_entry], 0
+    pop r15
     pop rbx
     ret
 
