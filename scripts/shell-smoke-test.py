@@ -171,6 +171,10 @@ def main() -> int:
             pid_matches = re.findall(rb"Task 3 PID: 0x([0-9A-F]{8})", pid_snapshot)
             if not pid_matches or int(pid_matches[-1], 16) < 5:
                 raise RuntimeError("user process did not receive a dynamic PID")
+            if b"Task 3 parent PID: 0x00000004" not in pid_snapshot:
+                raise RuntimeError("user process parent PID was not recorded")
+            if b"Task 3 name: usertest" not in pid_snapshot:
+                raise RuntimeError("user process name was not recorded")
             user_pid = str(int(pid_matches[-1], 16))
             termination_result = (
                 rb"(?:Process terminated and its address space reclaimed\."
@@ -267,6 +271,28 @@ def main() -> int:
                 user_fault_pattern,
                 "ring-3 protection fault isolation",
                 timeout=6,
+            )
+            fault_pid_pattern = rb"Task 3 PID: 0x[0-9A-F]{8}"
+            previous_fault_pid_count = len(re.findall(fault_pid_pattern, output()))
+            fault_ps = run_command(
+                ("p", "s", "ret"),
+                fault_pid_pattern,
+                "inspect faulted process metadata",
+                previous_count=previous_fault_pid_count,
+            )
+            fault_pids = re.findall(fault_pid_pattern + rb"$", fault_ps, re.MULTILINE)
+            if not fault_pids:
+                raise RuntimeError("faulted process PID was not visible")
+            fault_pid_match = re.search(rb"Task 3 PID: 0x([0-9A-F]{8})", fault_ps)
+            if fault_pid_match is None:
+                raise RuntimeError("could not parse faulted process PID")
+            if b"Task 3 exit status: 0x00000001" not in fault_ps:
+                raise RuntimeError("user fault did not record exit status 1")
+            fault_pid = str(int(fault_pid_match.group(1), 16))
+            run_command(
+                tuple(["w", "a", "i", "t", "spc"] + list(fault_pid) + ["ret"]),
+                re.escape(b"Process reaped; exit status: 0x00000001"),
+                "reap faulted process and collect fault exit status",
             )
             data = run_command(
                 ("h", "e", "l", "p", "ret"),
