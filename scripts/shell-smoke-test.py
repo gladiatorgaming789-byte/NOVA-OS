@@ -92,7 +92,7 @@ def main() -> int:
                 raise RuntimeError(f"{description} failed. Captured serial output:\n{captured}")
 
             help_pattern = re.escape(
-                b"Commands: help, about, clear, memory, mem, ps, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, cat2, write, write2, heap, halloc, hfree, uptime, reboot"
+                b"Commands: help, about, clear, memory, mem, ps, kill <pid>, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, cat2, write, write2, heap, halloc, hfree, uptime, reboot"
             )
             run_command(("h", "e", "l", "p", "ret"), help_pattern, "shell help command")
             print("Shell help check passed.")
@@ -124,6 +124,16 @@ def main() -> int:
                                   "scheduler task inspection")
             if b"Task 2: worker-b iterations: 0x" not in ps_data:
                 raise RuntimeError("ps did not report both scheduler worker tasks")
+            if b"Task 4 PID: 0x00000004" not in ps_data:
+                raise RuntimeError("ps did not report the stable shell PID")
+            invalid_kill = re.escape(
+                b"Process PID not found or kill syntax invalid (use: kill <pid>)."
+            )
+            run_command(
+                ("k", "i", "l", "l", "spc", "9", "9", "9", "ret"),
+                invalid_kill,
+                "reject unknown process ID",
+            )
             run_command(("m", "e", "m", "ret"), e820_pattern,
                         "mem alias")
             print("Task inspection and mem alias checks passed.")
@@ -138,6 +148,44 @@ def main() -> int:
                 timeout=6,
             )
             print("Ring-3 syscall write/exit test passed.")
+            # The single user slot receives a fresh PID on every launch.
+            # Kill it immediately after observing its output. Depending on the
+            # scheduler tick, it may have exited already; both outcomes must be
+            # safe, and ps must show the slot stopped with its CR3 reclaimed.
+            pid_pattern = rb"Task 3 PID: 0x[0-9A-F]{8}"
+            previous_pid_count = len(re.findall(pid_pattern, output()))
+            pid_snapshot = run_command(
+                ("p", "s", "ret"),
+                pid_pattern,
+                "user process PID inspection",
+                previous_count=previous_pid_count,
+            )
+            pid_matches = re.findall(rb"Task 3 PID: 0x([0-9A-F]{8})", pid_snapshot)
+            if not pid_matches or int(pid_matches[-1], 16) < 5:
+                raise RuntimeError("user process did not receive a dynamic PID")
+            user_pid = str(int(pid_matches[-1], 16))
+            termination_result = (
+                rb"(?:Process terminated and its address space reclaimed\."
+                rb"|Process exists but is not running\.)"
+            )
+            run_command(
+                tuple(["k", "i", "l", "l", "spc"] + list(user_pid) + ["ret"]),
+                termination_result,
+                "terminate or safely reject an already exited process",
+            )
+            stopped_pattern = re.escape(
+                b"Task 3 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x00000003"
+            )
+            previous_stopped_count = len(re.findall(stopped_pattern, output()))
+            stopped_snapshot = run_command(
+                ("p", "s", "ret"),
+                stopped_pattern,
+                "process is no longer schedulable",
+                previous_count=previous_stopped_count,
+            )
+            if b"Task 3 address-space root (0=none): 0x00000000" not in stopped_snapshot:
+                raise RuntimeError("terminated process retained its address-space root")
+            print(f"Process identity, termination, and VM cleanup checks passed (PID {user_pid}).")
 
             # Repeatedly launch and exit the same ring-3 test process. The
             # physical-page count must return to its baseline after every run;

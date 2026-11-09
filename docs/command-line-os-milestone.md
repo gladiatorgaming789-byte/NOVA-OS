@@ -22,6 +22,18 @@ This work is developed on `milestone/command-line-os`; `main` remains the known-
 - Implemented and verified in the latest successful full workflow: a bounded ELF64 loader for one static PT_LOAD segment, a built-in executable installed on the writable disk, and ring-3 syscalls for bounded file reads and writes. The test executable writes file contents, reads them back, yields/resumes under scheduling, exits, restarts successfully in the same boot, and the updated file is verified after a full guest reboot.
 - Not complete yet: a general process table and lifecycle, safe reclamation of per-process page tables/stacks, allocator locking/ownership cleanup, broader virtual-memory APIs, and directory/arbitrary file creation. The shell is now protected ring 3, but the full pre-GUI milestone still needs these lifecycle and storage hardening tasks.
 
+## Process-manager milestone (first slice)
+
+The first process-manager slice is implemented on `process-manager-next`:
+
+- Every scheduler slot has a stable PID field in its task control block. Kernel workers use PIDs 1 and 2, the user-program slot receives monotonically increasing PIDs starting at 5, and the interactive shell uses PID 4.
+- `ps` reports the shell and user-program PIDs alongside lifecycle and address-space diagnostics.
+- `kill <pid>` validates decimal PID input, rejects unknown IDs and stopped processes, and can retire the currently managed user process while the shell is active.
+- User-process termination disables interrupts during the state transition, clears its saved scheduler context, and reclaims its task-owned address-space pages before returning to the shell.
+- QEMU smoke tests cover stable shell identity, dynamic user PIDs, malformed/unknown targets, process termination requests, stopped-state scheduler exclusion, and address-space-root reclamation.
+
+This is deliberately a compatibility layer over the current fixed five-slot scheduler, not yet a general dynamic process table. Only the single user-program slot is currently killable; worker tasks and the shell are protected. The next process-manager increment should add dynamically allocated task slots, process names/parent IDs, wait/reap semantics, and a safe asynchronous termination request for a running process.
+
 ## Target architecture
 
 ### 1. Boot and kernel image
