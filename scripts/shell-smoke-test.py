@@ -92,7 +92,7 @@ def main() -> int:
                 raise RuntimeError(f"{description} failed. Captured serial output:\n{captured}")
 
             help_pattern = re.escape(
-                b"Commands: help, about, clear, memory, mem, ps, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, cat2, write, write2, heap, halloc, hfree, uptime, reboot"
+                b"Commands: help, about, clear, memory, mem, ps, kill <pid>, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, cat2, write, write2, heap, halloc, hfree, uptime, reboot"
             )
             run_command(("h", "e", "l", "p", "ret"), help_pattern, "shell help command")
             print("Shell help check passed.")
@@ -124,6 +124,16 @@ def main() -> int:
                                   "scheduler task inspection")
             if b"Task 2: worker-b iterations: 0x" not in ps_data:
                 raise RuntimeError("ps did not report both scheduler worker tasks")
+            if b"Task 4 PID: 0x00000004" not in ps_data:
+                raise RuntimeError("ps did not report the stable shell PID")
+            invalid_kill = re.escape(
+                b"Process PID not found or kill syntax invalid (use: kill <pid>)."
+            )
+            run_command(
+                ("k", "i", "l", "l", "spc", "9", "9", "9", "ret"),
+                invalid_kill,
+                "reject unknown process ID",
+            )
             run_command(("m", "e", "m", "ret"), e820_pattern,
                         "mem alias")
             print("Task inspection and mem alias checks passed.")
@@ -138,6 +148,25 @@ def main() -> int:
                 timeout=6,
             )
             print("Ring-3 syscall write/exit test passed.")
+
+            # The single user slot receives a fresh PID on every launch. After
+            # exit it remains queryable as STOPPED but is no longer killable.
+            pid_snapshot = run_command(
+                ("p", "s", "ret"),
+                rb"Task 3 PID: 0x[0-9A-F]{8}",
+                "user process PID inspection",
+            )
+            pid_matches = re.findall(rb"Task 3 PID: 0x([0-9A-F]{8})", pid_snapshot)
+            if not pid_matches or int(pid_matches[-1], 16) < 5:
+                raise RuntimeError("user process did not receive a dynamic PID")
+            user_pid = str(int(pid_matches[-1], 16))
+            not_running = re.escape(b"Process exists but is not running.")
+            run_command(
+                tuple(["k", "i", "l", "l", "spc", ...user_pid.split(""), "ret"]),
+                not_running,
+                "reject termination of an already stopped process",
+            )
+            print(f"Process identity and stopped-process checks passed (PID {user_pid}).")
 
             # Repeatedly launch and exit the same ring-3 test process. The
             # physical-page count must return to its baseline after every run;
