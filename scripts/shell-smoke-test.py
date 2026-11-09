@@ -92,7 +92,7 @@ def main() -> int:
                 raise RuntimeError(f"{description} failed. Captured serial output:\n{captured}")
 
             help_pattern = re.escape(
-                b"Commands: help, about, clear, memory, mem, ps, kill <pid>, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, cat2, write, write2, heap, halloc, hfree, uptime, reboot"
+                b"Commands: help, about, clear, memory, mem, ps, kill <pid>, wait <pid>, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, cat2, write, write2, heap, halloc, hfree, uptime, reboot"
             )
             run_command(("h", "e", "l", "p", "ret"), help_pattern, "shell help command")
             print("Shell help check passed.")
@@ -133,6 +133,14 @@ def main() -> int:
                 ("k", "i", "l", "l", "spc", "9", "9", "9", "ret"),
                 invalid_kill,
                 "reject unknown process ID",
+            )
+            invalid_wait = re.escape(
+                b"Process PID not found or wait syntax invalid (use: wait <pid>)."
+            )
+            run_command(
+                ("w", "a", "i", "t", "spc", "9", "9", "9", "ret"),
+                invalid_wait,
+                "reject wait for unknown process ID",
             )
             run_command(("m", "e", "m", "ret"), e820_pattern,
                         "mem alias")
@@ -186,6 +194,23 @@ def main() -> int:
             if b"Task 3 address-space root (0=none): 0x00000000" not in stopped_snapshot:
                 raise RuntimeError("terminated process retained its address-space root")
             print(f"Process identity, termination, and VM cleanup checks passed (PID {user_pid}).")
+
+            reaped_pattern = rb"Process reaped; exit status: 0x0000000[02]"
+            run_command(
+                tuple(["w", "a", "i", "t", "spc"] + list(user_pid) + ["ret"]),
+                reaped_pattern,
+                "collect process exit status and reap its slot",
+            )
+            reaped_snapshot = run_command(
+                ("p", "s", "ret"),
+                re.escape(b"Task 3 PID: 0x00000000"),
+                "verify reaped process identity is cleared",
+            )
+            if b"Task 3 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x00000000" not in reaped_snapshot:
+                raise RuntimeError("reaped process slot was not returned to UNUSED")
+            if b"Task 3 parent PID: 0x00000000" not in reaped_snapshot:
+                raise RuntimeError("reaped process retained its parent PID")
+            print("Wait/reap lifecycle passed: exit status collected and task slot released.")
 
             # Repeatedly launch and exit the same ring-3 test process. The
             # physical-page count must return to its baseline after every run;
