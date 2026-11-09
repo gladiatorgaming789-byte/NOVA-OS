@@ -30,7 +30,7 @@ The first process-manager slice is implemented on `process-manager-next`:
 - `ps` reports the shell and user-program PIDs alongside lifecycle and address-space diagnostics.
 - `kill <pid>` validates decimal PID input, rejects unknown IDs and stopped processes, and can retire the currently managed user process while the shell is active.
 - User-process termination disables interrupts during the state transition, clears its saved scheduler context, and reclaims its task-owned address-space pages before returning to the shell.
-- QEMU smoke tests cover stable shell identity, dynamic user PIDs, malformed/unknown targets, and attempts to terminate an already stopped process.
+- QEMU smoke tests cover stable shell identity, dynamic user PIDs, malformed/unknown targets, process termination requests, stopped-state scheduler exclusion, and address-space-root reclamation.
 
 This is deliberately a compatibility layer over the current fixed five-slot scheduler, not yet a general dynamic process table. Only the single user-program slot is currently killable; worker tasks and the shell are protected. The next process-manager increment should add dynamically allocated task slots, process names/parent IDs, wait/reap semantics, and a safe asynchronous termination request for a running process.
 
