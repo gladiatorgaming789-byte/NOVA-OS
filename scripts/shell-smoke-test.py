@@ -148,6 +148,14 @@ def main() -> int:
                 timeout=6,
             )
             print("Ring-3 syscall write/exit test passed.")
+            first_exit_pattern = re.escape(b"Ring-3 program exited through syscall.")
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline:
+                if first_exit_pattern in output():
+                    break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError("initial user process did not finish before PID inspection")
 
             # The single user slot receives a fresh PID on every launch. After
             # exit it remains queryable as STOPPED but is no longer killable.
