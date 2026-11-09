@@ -162,8 +162,8 @@ def main() -> int:
                 raise RuntimeError("user process did not receive a dynamic PID")
             user_pid = str(int(pid_matches[-1], 16))
             termination_result = (
-                rb"(?:Process terminated and its address space reclaimed\\."
-                rb"|Process exists but is not running\\.)"
+                rb"(?:Process terminated and its address space reclaimed\."
+                rb"|Process exists but is not running\.)"
             )
             run_command(
                 tuple(["k", "i", "l", "l", "spc"] + list(user_pid) + ["ret"]),
