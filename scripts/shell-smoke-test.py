@@ -92,7 +92,7 @@ def main() -> int:
                 raise RuntimeError(f"{description} failed. Captured serial output:\n{captured}")
 
             help_pattern = re.escape(
-                b"Commands: help, about, clear, memory, mem, ps, kill <pid>, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, cat2, write, write2, heap, halloc, hfree, uptime, reboot"
+                b"Commands: help, about, clear, memory, mem, ps, kill <pid>, wait <pid>, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, cat2, write, write2, heap, halloc, hfree, uptime, reboot"
             )
             run_command(("h", "e", "l", "p", "ret"), help_pattern, "shell help command")
             print("Shell help check passed.")
@@ -134,6 +134,14 @@ def main() -> int:
                 invalid_kill,
                 "reject unknown process ID",
             )
+            invalid_wait = re.escape(
+                b"Process PID not found or wait syntax invalid (use: wait <pid>)."
+            )
+            run_command(
+                ("w", "a", "i", "t", "spc", "9", "9", "9", "ret"),
+                invalid_wait,
+                "reject wait for unknown process ID",
+            )
             run_command(("m", "e", "m", "ret"), e820_pattern,
                         "mem alias")
             print("Task inspection and mem alias checks passed.")
@@ -163,6 +171,10 @@ def main() -> int:
             pid_matches = re.findall(rb"Task 3 PID: 0x([0-9A-F]{8})", pid_snapshot)
             if not pid_matches or int(pid_matches[-1], 16) < 5:
                 raise RuntimeError("user process did not receive a dynamic PID")
+            if b"Task 3 parent PID: 0x00000004" not in pid_snapshot:
+                raise RuntimeError("user process parent PID was not recorded")
+            if b"Task 3 name: usertest" not in pid_snapshot:
+                raise RuntimeError("user process name was not recorded")
             user_pid = str(int(pid_matches[-1], 16))
             termination_result = (
                 rb"(?:Process terminated and its address space reclaimed\."
@@ -186,6 +198,23 @@ def main() -> int:
             if b"Task 3 address-space root (0=none): 0x00000000" not in stopped_snapshot:
                 raise RuntimeError("terminated process retained its address-space root")
             print(f"Process identity, termination, and VM cleanup checks passed (PID {user_pid}).")
+
+            reaped_pattern = rb"Process reaped; exit status: 0x0000000[02]"
+            run_command(
+                tuple(["w", "a", "i", "t", "spc"] + list(user_pid) + ["ret"]),
+                reaped_pattern,
+                "collect process exit status and reap its slot",
+            )
+            reaped_snapshot = run_command(
+                ("p", "s", "ret"),
+                re.escape(b"Task 3 PID: 0x00000000"),
+                "verify reaped process identity is cleared",
+            )
+            if b"Task 3 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x00000000" not in reaped_snapshot:
+                raise RuntimeError("reaped process slot was not returned to UNUSED")
+            if b"Task 3 parent PID: 0x00000000" not in reaped_snapshot:
+                raise RuntimeError("reaped process retained its parent PID")
+            print("Wait/reap lifecycle passed: exit status collected and task slot released.")
 
             # Repeatedly launch and exit the same ring-3 test process. The
             # physical-page count must return to its baseline after every run;
@@ -242,6 +271,27 @@ def main() -> int:
                 user_fault_pattern,
                 "ring-3 protection fault isolation",
                 timeout=6,
+            )
+            fault_ps = run_command(
+                ("p", "s", "ret"),
+                re.escape(b"Task 3 exit status: 0x00000001"),
+                "inspect faulted process metadata",
+            )
+            fault_pid_matches = re.findall(
+                rb"Task 3 PID: 0x([0-9A-F]{8})", fault_ps
+            )
+            if not fault_pid_matches:
+                raise RuntimeError(
+                    "could not parse faulted process PID from ps output: "
+                    + fault_ps.decode(errors="replace")[-1200:]
+                )
+            if b"Task 3 exit status: 0x00000001" not in fault_ps:
+                raise RuntimeError("user fault did not record exit status 1")
+            fault_pid = str(int(fault_pid_matches[-1], 16))
+            run_command(
+                tuple(["w", "a", "i", "t", "spc"] + list(fault_pid) + ["ret"]),
+                re.escape(b"Process reaped; exit status: 0x00000001"),
+                "reap faulted process and collect fault exit status",
             )
             data = run_command(
                 ("h", "e", "l", "p", "ret"),

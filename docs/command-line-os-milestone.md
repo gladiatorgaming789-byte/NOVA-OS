@@ -22,17 +22,18 @@ This work is developed on `milestone/command-line-os`; `main` remains the known-
 - Implemented and verified in the latest successful full workflow: a bounded ELF64 loader for one static PT_LOAD segment, a built-in executable installed on the writable disk, and ring-3 syscalls for bounded file reads and writes. The test executable writes file contents, reads them back, yields/resumes under scheduling, exits, restarts successfully in the same boot, and the updated file is verified after a full guest reboot.
 - Not complete yet: a general process table and lifecycle, safe reclamation of per-process page tables/stacks, allocator locking/ownership cleanup, broader virtual-memory APIs, and directory/arbitrary file creation. The shell is now protected ring 3, but the full pre-GUI milestone still needs these lifecycle and storage hardening tasks.
 
-## Process-manager milestone (first slice)
+## Process-manager milestone (identity, termination, and wait/reap)
 
-The first process-manager slice is implemented on `process-manager-next`:
+The first process-manager slice adds stable PIDs and safe retirement to the existing five-slot scheduler. The follow-up `process-wait-reap` slice extends the TCB with process metadata and an explicit completion lifecycle:
 
-- Every scheduler slot has a stable PID field in its task control block. Kernel workers use PIDs 1 and 2, the user-program slot receives monotonically increasing PIDs starting at 5, and the interactive shell uses PID 4.
-- `ps` reports the shell and user-program PIDs alongside lifecycle and address-space diagnostics.
-- `kill <pid>` validates decimal PID input, rejects unknown IDs and stopped processes, and can retire the currently managed user process while the shell is active.
-- User-process termination disables interrupts during the state transition, clears its saved scheduler context, and reclaims its task-owned address-space pages before returning to the shell.
-- QEMU smoke tests cover stable shell identity, dynamic user PIDs, malformed/unknown targets, process termination requests, stopped-state scheduler exclusion, and address-space-root reclamation.
+- Kernel workers use PIDs 1 and 2, the shell uses PID 4, and each user-program launch receives a monotonically increasing PID starting at 5.
+- User tasks record a name (`usertest` or `NOVA.ELF`), parent PID (currently shell PID 4), and exit status (0=normal, 1=user fault, 2=terminated/invalid syscall).
+- `ps` reports the user task's PID, parent PID, name, exit status, lifecycle, and address-space root.
+- `kill <pid>` validates decimal PID input, rejects unknown IDs and stopped processes, and retires the currently managed user process while the shell is active. The task-owned address-space pages are reclaimed after switching back to the shell's address space.
+- `wait <pid>` collects the stopped process's exit status and reaps its slot, clearing its PID, parent, name, and lifecycle back to UNUSED. If it is still running, the command reports that the caller should retry; this first version is non-blocking.
+- QEMU smoke tests cover invalid PID handling, process metadata, termination, VM reclamation, wait/reap, slot reuse, and repeated user-process launches without physical-page leaks.
 
-This is deliberately a compatibility layer over the current fixed five-slot scheduler, not yet a general dynamic process table. Only the single user-program slot is currently killable; worker tasks and the shell are protected. The next process-manager increment should add dynamically allocated task slots, process names/parent IDs, wait/reap semantics, and a safe asynchronous termination request for a running process.
+The scheduler is still a fixed five-slot table and only one user-program slot exists. This milestone establishes the metadata and lifecycle contract before the next larger change: generalizing scheduler selection, per-task VM ownership, kernel stacks, syscall dispatch, and cleanup to a dynamically allocated process table. A true blocking wait queue and multiple simultaneous user processes remain future work.
 
 ## Target architecture
 
