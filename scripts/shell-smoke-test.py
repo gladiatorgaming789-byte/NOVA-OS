@@ -162,7 +162,7 @@ def main() -> int:
             user_pid = str(int(pid_matches[-1], 16))
             not_running = re.escape(b"Process exists but is not running.")
             run_command(
-                tuple(["k", "i", "l", "l", "spc", ...user_pid.split(""), "ret"]),
+                tuple(["k", "i", "l", "l", "spc"] + list(user_pid) + ["ret"]),
                 not_running,
                 "reject termination of an already stopped process",
             )
