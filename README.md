@@ -36,9 +36,10 @@ Builds use NASM and xorriso in GitHub Actions. Each successful workflow run publ
 
 ## Current command-line milestone
 
-On the `milestone/command-line-os` branch, the kernel currently provides:
+The current `main` baseline and process-manager development branch provide:
 
 - `help`, `memory`, `alloc`, `free`, `pmmtest`, `heap`, `halloc`, `hfree`, and `uptime` diagnostics.
+- `ps` to inspect task IDs, lifecycle, process metadata, and address-space roots; `kill <pid>` to terminate the managed user process; and `wait <pid>` to collect its exit status and release its stopped task slot.
 - `schedtest` to verify both timer-preempted kernel worker tasks progress.
 - `usertest` schedules a built-in ring-3 program as a preemptible task; it prints through syscall 1 and exits through syscall 2.
 - `userfaulttest` schedules a user-mode protection-fault test and verifies that the faulting task is terminated without losing the shell.
@@ -46,7 +47,7 @@ On the `milestone/command-line-os` branch, the kernel currently provides:
 
 Attach both the ISO and `nova-data.img` to VirtualBox. Keep the ISO as the boot device and attach `nova-data.img` as a writable IDE hard disk. Do not use the ISO as the writable data volume. The automated workflow verifies that a ring-3 executable writes file contents, reads them back, and that the updated file survives a full guest reboot.
 
-The interactive shell now runs in ring 3 with a separate address space and supervisor-only kernel entry stack. Keyboard input and command execution cross a bounded syscall interface; the PIT scheduler preempts it alongside kernel workers and user ELF tasks. These are integration milestones, not a complete process/filesystem implementation. Remaining internal work includes a general process table, safer process/allocator cleanup, broader virtual-memory APIs, and directory-based storage before the GUI phase.
+The interactive shell now runs in ring 3 with a separate address space and supervisor-only kernel entry stack. Keyboard input and command execution cross a bounded syscall interface; the PIT scheduler preempts it alongside kernel workers and user ELF tasks. These are integration milestones, not a complete process/filesystem implementation. The process manager currently uses a fixed five-slot scheduler with one user-program slot; multiple simultaneous user processes, a dynamically allocated task table, blocking wait queues, safer allocator synchronization, broader virtual-memory APIs, and directory-based storage remain future work before the GUI phase.
 
 ## Testing policy
 
