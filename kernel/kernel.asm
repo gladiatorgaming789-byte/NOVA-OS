@@ -2326,6 +2326,12 @@ user_vm_init64:
     jmp task_vm_init64
 
 task_vm_init64:
+    ; Derive the TCB offset from the requested slot before reading it. Save
+    ; the caller's R15 because ELF loading keeps file metadata there.
+    push r15
+    movzx eax, dil
+    imul rax, TASK_RECORD_SIZE
+    mov r15, rax
     cmp qword [rel task_records + r15 + TASK_VM_PML4_OFFSET], 0
     jne .ready
     push rbx
@@ -2333,10 +2339,6 @@ task_vm_init64:
     push r12
     push r13
     push r14
-    push r15
-    movzx eax, dil
-    imul rax, TASK_RECORD_SIZE
-    mov r15, rax
     xor r14d, r14d
     call pmm_alloc_page64
     test rax, rax
@@ -2458,15 +2460,16 @@ task_vm_init64:
     xor r14d, r14d
 .done:
     mov eax, r14d
-    pop r15
     pop r14
     pop r13
     pop r12
     pop rbp
     pop rbx
+    pop r15
     ret
 .ready:
     mov eax, 1
+    pop r15
     ret
 
 shell_vm_init64:
