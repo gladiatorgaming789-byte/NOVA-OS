@@ -23,10 +23,18 @@ if [[ "$boot_size" -ne 512 ]]; then
   echo "error: boot sector must be 512 bytes, got $boot_size" >&2
   exit 1
 fi
-if [[ "$kernel_size" -gt 8192 ]]; then
-  echo "error: kernel is larger than the 16 sectors loaded by the bootloader ($kernel_size bytes)" >&2
+if [[ "$kernel_size" -gt 262144 ]]; then
+  echo "error: kernel exceeds the bootloader's 512-sector (256 KiB) load limit ($kernel_size bytes)" >&2
   exit 1
 fi
+
+# Patch the sector count so the BIOS loader reads only the sectors occupied by
+# this kernel, while retaining the 256 KiB hard safety limit.
+python3 "$ROOT/scripts/patch-boot-sector.py" "$OUT/boot.bin" "$kernel_size"
+
+# Separate 4 MiB writable IDE data disk. The kernel's NOVA filesystem owns
+# sectors 0-1; this disk is deliberately separate from the read-only boot ISO.
+dd if=/dev/zero of="$OUT/nova-data.img" bs=512 count=8192 status=none
 
 # 1.44 MiB floppy image; kernel starts at sector 2.
 dd if=/dev/zero of="$OUT/nova-os.img" bs=512 count=2880 status=none
@@ -44,5 +52,5 @@ xorriso -as mkisofs \
   -b nova-os.img \
   -c boot.cat \
   "$ISO_ROOT" >/dev/null
-sha256sum "$OUT/nova-os.img" "$OUT/nova-os.iso" > "$OUT/SHA256SUMS.txt"
-printf 'Built floppy image: %s\nBootable ISO: %s\nBoot sector: %s bytes\nKernel: %s bytes\n' "$OUT/nova-os.img" "$OUT/nova-os.iso" "$boot_size" "$kernel_size"
+sha256sum "$OUT/nova-os.img" "$OUT/nova-os.iso" "$OUT/nova-data.img" > "$OUT/SHA256SUMS.txt"
+printf 'Built floppy image: %s\nBootable ISO: %s\nWritable data disk: %s\nBoot sector: %s bytes\nKernel: %s bytes\n' "$OUT/nova-os.img" "$OUT/nova-os.iso" "$OUT/nova-data.img" "$boot_size" "$kernel_size"

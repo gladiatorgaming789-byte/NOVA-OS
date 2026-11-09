@@ -11,8 +11,15 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+      - name: Prepare apt package cache
+        run: mkdir -p "${RUNNER_TEMP}/apt-cache" && sudo chown "$USER:$USER" "${RUNNER_TEMP}/apt-cache"
+      - name: Cache apt package archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/apt-cache
+          key: ${{ runner.os }}-nova-apt-tools-v1
       - name: Install NASM and QEMU
-        run: sudo apt-get update && sudo apt-get install -y nasm xorriso qemu-system-x86
+        run: timeout 900s bash -c 'sudo apt-get update -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 && sudo apt-get -o Dir::Cache::archives="$RUNNER_TEMP/apt-cache" install -y --no-install-recommends nasm xorriso qemu-system-x86'
       - name: Assemble boot sector and kernel image
         run: bash scripts/build.sh
       - name: Boot-test in QEMU
@@ -72,7 +79,7 @@ jobs:
         run: |
           set -euo pipefail
           nasm -D NOVA_TEST_EXCEPTION=1 -f bin kernel/kernel.asm -o build/kernel-exception-test.bin
-          test "$(wc -c < build/kernel-exception-test.bin)" -le 8192
+          test "$(wc -c < build/kernel-exception-test.bin)" -le 262144
           dd if=/dev/zero of=build/nova-exception-test.img bs=512 count=2880 status=none
           dd if=build/boot.bin of=build/nova-exception-test.img conv=notrunc status=none
           dd if=build/kernel-exception-test.bin of=build/nova-exception-test.img bs=512 seek=1 conv=notrunc status=none
@@ -94,8 +101,8 @@ jobs:
             exit 1
           fi
           echo "Exception test passed: INT3 was caught and reported by the IDT."
-      - name: Smoke-test interactive shell through QEMU keyboard
-        run: python3 scripts/shell-smoke-test.py build/nova-os.img
+      - name: Smoke-test interactive shell, user mode, and persistent disk through QEMU
+        run: python3 scripts/shell-smoke-test.py build/nova-os.img build/nova-data.img
       - name: Upload bootable ISO, floppy image, and logs
         uses: actions/upload-artifact@v4
         with:
@@ -103,6 +110,7 @@ jobs:
           path: |
             build/nova-os.iso
             build/nova-os.img
+            build/nova-data.img
             build/SHA256SUMS.txt
             build/serial.log
             build/iso-serial.log

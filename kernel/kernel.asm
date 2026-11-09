@@ -8,6 +8,42 @@ PML4_ADDR equ 0x90000
 PDPT_ADDR equ 0x91000
 PD_ADDR   equ 0x92000
 VGA_TEXT_ADDR equ 0xB8000
+TASK1_STACK_TOP equ 0x88000
+TASK2_STACK_TOP equ 0x8C000
+TASK3_STACK_TOP equ 0x8A000
+TSS_STACK_TOP equ 0x8E000
+USER_TASK_INDEX equ 3
+SHELL_TASK_INDEX equ 4
+TASK_COUNT equ 5
+TASK_UNUSED equ 0
+TASK_READY equ 1
+TASK_RUNNING equ 2
+TASK_STOPPED equ 3
+; Per-task control block (TCB) layout shared by scheduler and process manager.
+TASK_STATE_OFFSET equ 0
+TASK_STARTED_OFFSET equ 1
+TASK_SAVED_RSP_OFFSET equ 8
+TASK_CR3_OFFSET equ 16
+; User VM-owned pages are stored directly in the owning task's TCB.
+TASK_VM_PML4_OFFSET equ 24
+TASK_VM_PDPT_OFFSET equ 32
+TASK_VM_PD_OFFSET equ 40
+TASK_VM_CODE_PT_OFFSET equ 48
+TASK_VM_STACK_PT_OFFSET equ 56
+TASK_VM_CODE_PAGE_OFFSET equ 64
+TASK_VM_STACK_PAGE_OFFSET equ 72
+TASK_PID_OFFSET equ 80
+TASK_RECORD_SIZE equ 88
+USER_CODE_VIRT equ 0x400000
+USER_STACK_VIRT equ 0x600000
+USER_STACK_TOP equ 0x600FF0
+USER_CODE_SEL equ 0x2B
+USER_DATA_SEL equ 0x33
+FS_SUPER_LBA equ 0
+FS_DATA_LBA equ 1
+FS_ELF_LBA equ 2
+FS_DATA2_LBA equ 3
+FS_MAX_FILE_SIZE equ 500
 
 kernel_entry:
     cli
@@ -109,7 +145,7 @@ print16:
 collect_e820:
     pushad
     push es
-    xor ax, ax
+    mov ax, 0x5000
     mov es, ax
     mov word [e820_count], 0
     mov dword [e820_continuation], 0
@@ -119,8 +155,9 @@ collect_e820:
     mov ax, [e820_count]
     mov dx, 24
     mul dx
-    add ax, 0x5000
     mov di, ax
+    mov ax, 0x5000
+    mov es, ax
     mov dword [es:di + 20], 1
     mov eax, 0xE820
     mov edx, 0x534D4150
@@ -152,6 +189,13 @@ gdt_code64:
     dq 0x00AF9A000000FFFF
 gdt_data64:
     dq 0x00CF92000000FFFF
+gdt_user_code64:
+    dq 0x00AFFA000000FFFF
+gdt_user_data64:
+    dq 0x00CFF2000000FFFF
+gdt_tss:
+    dq 0
+    dq 0
 gdt_end:
 
 gdt_descriptor:
@@ -298,57 +342,46 @@ long_mode_entry:
     call serial_putc64
 
     ; Install exception and hardware IRQ gates before enabling interrupts.
+    call tss_init64
     call init_idt64
     call pic_init64
     call pit_init64
     call pmm_init64
+    call shell_vm_init64
+    test eax, eax
+    jz .shell_vm_fail
+    call scheduler_init64
 %ifdef NOVA_TEST_EXCEPTION
     int3                         ; CI-only fault injection validates the IDT.
 %endif
     call screen_clear64
-    sti
     mov rsi, banner64
     call print_string64
     mov al, 10
     call put_char64
-    call print_prompt64
-
-.keyboard_loop:
-    call poll_keyboard64
-    test al, al
-    jz .keyboard_loop
-    cmp al, 10
-    je .enter
-    cmp al, 8
-    je .backspace
-    mov ecx, [line_length]
-    cmp ecx, 127
-    jae .keyboard_loop
-    mov [line_buffer + rcx], al
-    inc ecx
-    mov [line_length], ecx
-    call put_char64
-    jmp .keyboard_loop
-.backspace:
-    mov ecx, [line_length]
-    test ecx, ecx
-    jz .keyboard_loop
-    dec ecx
-    mov [line_length], ecx
-    mov byte [line_buffer + rcx], 0
-    mov al, 8
-    call put_char64
-    jmp .keyboard_loop
-.enter:
-    mov ecx, [line_length]
-    mov byte [line_buffer + rcx], 0
+    ; Enter the protected user shell directly. The first PIT tick saves this
+    ; ring-3 context in task slot 4, after which round-robin preemption applies.
+    cli
+    mov byte [rel current_task_index], SHELL_TASK_INDEX
+    mov rax, [rel shell_pml4_page]
+    mov cr3, rax
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
+    push qword USER_DATA_SEL
+    push qword USER_STACK_TOP
+    push qword 0x202
+    push qword USER_CODE_SEL
+    push qword USER_CODE_VIRT
+    iretq
+.shell_vm_fail:
+    mov rsi, message_shell_vm_failed
+    call print_string64
     mov al, 10
     call put_char64
-    call execute_command64
-    mov dword [line_length], 0
-    mov byte [line_buffer], 0
-    call print_prompt64
-    jmp .keyboard_loop
+    cli
+.shell_halt:
+    hlt
+    jmp .shell_halt
 
 screen_clear64:
     push rax
@@ -572,6 +605,11 @@ execute_command64:
     test al, al
     jnz .memory
     mov rsi, line_buffer
+    mov rdi, command_mem
+    call strings_equal64
+    test al, al
+    jnz .memory
+    mov rsi, line_buffer
     mov rdi, command_alloc
     call strings_equal64
     test al, al
@@ -601,6 +639,66 @@ execute_command64:
     call strings_equal64
     test al, al
     jnz .pmmtest
+    mov rsi, line_buffer
+    mov rdi, command_schedtest
+    call strings_equal64
+    test al, al
+    jnz .schedtest
+    mov rsi, line_buffer
+    mov rdi, command_ps
+    call strings_equal64
+    test al, al
+    jnz .ps
+    mov rsi, line_buffer
+    mov rdi, command_install
+    call strings_equal64
+    test al, al
+    jnz .fs_install
+    mov rsi, line_buffer
+    mov rdi, command_exec
+    call strings_equal64
+    test al, al
+    jnz .fs_exec
+    mov rsi, line_buffer
+    mov rdi, command_ls
+    call strings_equal64
+    test al, al
+    jnz .fs_ls
+    mov rsi, line_buffer
+    mov rdi, command_cat2
+    call strings_equal64
+    test al, al
+    jnz .fs_cat2
+    mov rsi, line_buffer
+    mov rdi, command_cat
+    call strings_equal64
+    test al, al
+    jnz .fs_cat
+    mov rsi, line_buffer
+    mov rdi, command_usertest
+    call strings_equal64
+    test al, al
+    jnz .usertest
+    mov rsi, line_buffer
+    mov rdi, command_userfaulttest
+    call strings_equal64
+    test al, al
+    jnz .userfaulttest
+    mov rsi, line_buffer
+    mov rdi, command_kill_prefix
+    call string_starts_with64
+    test al, al
+    jnz .kill
+    mov rsi, line_buffer
+    mov rdi, command_write2_prefix
+    call string_starts_with64
+    test al, al
+    jnz .fs_write2
+    mov rsi, line_buffer
+    mov rdi, command_write_prefix
+    call string_starts_with64
+    test al, al
+    jnz .fs_write
     mov rsi, line_buffer
     mov rdi, command_uptime
     call strings_equal64
@@ -793,6 +891,150 @@ execute_command64:
     mov al, 10
     call put_char64
     jmp .done
+.kill:
+    ; The shell is the active context while this command runs. Switch off
+    ; interrupts while retiring the user task so the scheduler cannot select
+    ; it between marking it stopped and reclaiming its address-space pages.
+    pushfq
+    cli
+    lea rsi, [rel line_buffer + 5]
+    call parse_decimal64
+    cmp eax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET]
+    jne .kill_invalid
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    jne .kill_invalid
+    cmp byte [rel user_process_state], 1
+    jne .kill_not_running
+    mov byte [rel user_process_state], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_STOPPED
+    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    call user_vm_cleanup64
+    popfq
+    mov rsi, message_process_killed
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.kill_invalid:
+    popfq
+    mov rsi, message_process_not_found
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.kill_not_running:
+    popfq
+    mov rsi, message_process_not_running
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.ps:
+    mov rsi, message_ps_foreground
+    call print_string64
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_worker_a
+    call print_string64
+    mov eax, [rel scheduler_counter_a]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_worker_b
+    call print_string64
+    mov eax, [rel scheduler_counter_b]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_user
+    call print_string64
+    movzx eax, byte [rel user_process_state]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_user_pid
+    call print_string64
+    mov eax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_user_lifecycle
+    call print_string64
+    movzx eax, byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_shell_pid
+    call print_string64
+    mov eax, [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_shell_lifecycle
+    call print_string64
+    movzx eax, byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_user_cr3
+    call print_string64
+    mov rax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_CR3_OFFSET]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_shell_cr3
+    call print_string64
+    mov rax, [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_CR3_OFFSET]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    jmp .done
+.schedtest:
+    cmp qword [rel scheduler_counter_a], 0
+    je .schedtest_failed
+    cmp qword [rel scheduler_counter_b], 0
+    je .schedtest_failed
+    mov rsi, message_schedtest_pass
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.schedtest_failed:
+    mov rsi, message_schedtest_fail
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.fs_install:
+    call fs_install64
+    jmp .done
+.fs_exec:
+    call fs_exec64
+    jmp .done
+.fs_ls:
+    call fs_list64
+    jmp .done
+.fs_cat:
+    call fs_cat64
+    jmp .done
+.fs_cat2:
+    call fs_cat2_64
+    jmp .done
+.fs_write2:
+    call fs_write2_64
+    jmp .done
+.fs_write:
+    call fs_write64
+    jmp .done
+.usertest:
+    xor edi, edi
+    call user_task_test_start64
+    jmp .done
+.userfaulttest:
+    mov edi, 1
+    call user_task_test_start64
+    jmp .done
 .uptime:
     mov rsi, message_uptime
     call print_string64
@@ -890,6 +1132,749 @@ strings_equal64:
 
 
 
+; Install a small statically-linked ELF64 test executable into the single
+; NOVA filesystem slot. Unknown nonblank media is rejected rather than erased.
+fs_install64:
+    push rbx
+    push r12
+    push r13
+    mov eax, FS_SUPER_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .disk_error
+    call fs_read_header64
+    test eax, eax
+    jnz .header_valid
+    ; A blank disk is initialized; unknown nonblank media is never erased.
+    lea rsi, [rel fs_sector_buffer]
+    mov ecx, 512
+.blank_check:
+    cmp byte [rsi], 0
+    jne .invalid
+    inc rsi
+    loop .blank_check
+    lea rdi, [rel fs_sector_buffer]
+    xor eax, eax
+    mov ecx, 64
+    rep stosq
+    lea rsi, [rel fs_magic]
+    lea rdi, [rel fs_sector_buffer]
+    mov ecx, 7
+    rep movsb
+.header_valid:
+    mov r12d, user_elf_end - user_elf_start
+    mov [rel fs_sector_buffer + 28], r12d
+    lea rsi, [rel fs_elf_filename]
+    lea rdi, [rel fs_sector_buffer + 20]
+    mov ecx, 8
+    rep movsb
+    mov eax, FS_SUPER_LBA
+    lea rsi, [rel fs_sector_buffer]
+    call ata_write_sector64
+    test eax, eax
+    jz .disk_error
+    lea rdi, [rel fs_sector_buffer]
+    xor eax, eax
+    mov ecx, 64
+    rep stosq
+    lea rsi, [rel user_elf_start]
+    lea rdi, [rel fs_sector_buffer]
+    mov ecx, r12d
+    rep movsb
+    mov eax, FS_ELF_LBA
+    lea rsi, [rel fs_sector_buffer]
+    call ata_write_sector64
+    test eax, eax
+    jz .disk_error
+    mov rsi, message_fs_installed
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.invalid:
+    mov rsi, message_fs_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.disk_error:
+    mov rsi, message_fs_no_disk
+    call print_string64
+    mov al, 10
+    call put_char64
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Load a bounded, single-PT_LOAD ELF64 executable from the data sector.
+; Only fixed virtual address 0x400000 is supported in this first loader.
+fs_exec64:
+    push rbp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    cmp byte [rel user_process_state], 1
+    je .already_running
+    call fs_read_header64
+    test eax, eax
+    jz .failed
+    mov r12d, [rel fs_sector_buffer + 28]
+    cmp r12d, 120
+    jb .invalid
+    mov eax, FS_ELF_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .failed
+    cmp dword [rel fs_sector_buffer], 0x464C457F
+    jne .invalid
+    cmp word [rel fs_sector_buffer + 4], 0x0102
+    jne .invalid
+    cmp word [rel fs_sector_buffer + 16], 2
+    jne .invalid
+    cmp word [rel fs_sector_buffer + 18], 0x003E
+    jne .invalid
+    cmp dword [rel fs_sector_buffer + 20], 1
+    jne .invalid
+    cmp qword [rel fs_sector_buffer + 32], 64
+    jne .invalid
+    cmp word [rel fs_sector_buffer + 52], 64
+    jne .invalid
+    cmp word [rel fs_sector_buffer + 54], 56
+    jne .invalid
+    cmp word [rel fs_sector_buffer + 56], 1
+    jne .invalid
+    cmp word [rel fs_sector_buffer + 58], 64
+    jne .invalid
+    cmp dword [rel fs_sector_buffer + 64], 1
+    jne .invalid
+    cmp dword [rel fs_sector_buffer + 68], 5
+    jne .invalid
+    cmp qword [rel fs_sector_buffer + 72], 0
+    jne .invalid
+    cmp qword [rel fs_sector_buffer + 80], USER_CODE_VIRT
+    jne .invalid
+    mov r13, [rel fs_sector_buffer + 24]
+    cmp r13, USER_CODE_VIRT + 120
+    jb .invalid
+    cmp r13, USER_CODE_VIRT + 4096
+    jae .invalid
+    mov r14, [rel fs_sector_buffer + 96]
+    cmp r14, r12
+    ja .invalid
+    cmp r14, 4096
+    ja .invalid
+    mov r15, [rel fs_sector_buffer + 104]
+    cmp r15, r14
+    jb .invalid
+    cmp r15, 4096
+    ja .invalid
+    ; Entry point must fall inside the file-backed portion of the load segment.
+    mov rax, [rel fs_sector_buffer + 80]
+    add rax, r14
+    jc .invalid
+    cmp r13, rax
+    jae .invalid
+    ; Require the expected page alignment and a single-page segment.
+    cmp qword [rel fs_sector_buffer + 112], 0x1000
+    jne .invalid
+    call user_vm_init64
+    test eax, eax
+    jz .failed
+    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PAGE_OFFSET]
+    call vm_zero_page64
+    lea rsi, [rel fs_sector_buffer]
+    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PAGE_OFFSET]
+    mov rcx, r14
+    rep movsb
+    mov [rel user_process_entry], r13
+    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    mov eax, [rel next_process_pid]
+    mov [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET], eax
+    inc dword [rel next_process_pid]
+    jnz .pid_ready
+    mov dword [rel next_process_pid], 5
+.pid_ready:
+    mov byte [rel user_process_state], 1
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
+    mov rsi, message_fs_exec_started
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .return
+.already_running:
+    mov rsi, message_fs_exec_running
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .return
+.invalid:
+    mov rsi, message_fs_elf_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .return
+.failed:
+    mov rsi, message_fs_exec_failed
+    call print_string64
+    mov al, 10
+    call put_char64
+.return:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+
+; ATA primary-master PIO sector access (LBA28), for a separate writable IDE disk.
+; EAX=LBA, RDI=buffer for read; EAX=LBA, RSI=buffer for write. EAX=1 success.
+ata_wait_drq64:
+    push rdx
+    push rcx
+    mov dx, 0x1F7
+    mov ecx, 0x100000
+.wait:
+    in al, dx
+    test al, 0x80
+    jnz .again
+    test al, 0x21
+    jnz .fail
+    test al, 0x08
+    jnz .ok
+.again:
+    loop .wait
+.fail:
+    xor eax, eax
+    pop rcx
+    pop rdx
+    ret
+.ok:
+    mov eax, 1
+    pop rcx
+    pop rdx
+    ret
+
+ata_wait_complete64:
+    push rdx
+    push rcx
+    mov dx, 0x1F7
+    mov ecx, 0x100000
+.wait:
+    in al, dx
+    test al, 0x80
+    jnz .again
+    test al, 0x21
+    jnz .fail
+    mov eax, 1
+    pop rcx
+    pop rdx
+    ret
+.again:
+    loop .wait
+.fail:
+    xor eax, eax
+    pop rcx
+    pop rdx
+    ret
+
+ata_read_sector64:
+    push rbx
+    push r12
+    push r13
+    mov r12d, eax
+    mov r13, rdi
+    mov dx, 0x1F6
+    mov eax, r12d
+    shr eax, 24
+    and al, 0x0F
+    or al, 0xE0
+    out dx, al
+    mov dx, 0x1F2
+    mov al, 1
+    out dx, al
+    mov eax, r12d
+    mov dx, 0x1F3
+    out dx, al
+    shr eax, 8
+    mov dx, 0x1F4
+    out dx, al
+    shr eax, 8
+    mov dx, 0x1F5
+    out dx, al
+    mov dx, 0x1F7
+    mov al, 0x20
+    out dx, al
+    call ata_wait_drq64
+    test eax, eax
+    jz .fail
+    mov dx, 0x1F0
+    mov rdi, r13
+    mov ecx, 256
+    rep insw
+    mov eax, 1
+    jmp .done
+.fail:
+    xor eax, eax
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+ata_write_sector64:
+    push rbx
+    push r12
+    push r13
+    mov r12d, eax
+    mov r13, rsi
+    mov dx, 0x1F6
+    mov eax, r12d
+    shr eax, 24
+    and al, 0x0F
+    or al, 0xE0
+    out dx, al
+    mov dx, 0x1F2
+    mov al, 1
+    out dx, al
+    mov eax, r12d
+    mov dx, 0x1F3
+    out dx, al
+    shr eax, 8
+    mov dx, 0x1F4
+    out dx, al
+    shr eax, 8
+    mov dx, 0x1F5
+    out dx, al
+    mov dx, 0x1F7
+    mov al, 0x30
+    out dx, al
+    call ata_wait_drq64
+    test eax, eax
+    jz .fail
+    mov dx, 0x1F0
+    mov rsi, r13
+    mov ecx, 256
+    rep outsw
+    mov dx, 0x1F7
+    mov al, 0xE7
+    out dx, al
+    call ata_wait_complete64
+    jmp .done
+.fail:
+    xor eax, eax
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+string_starts_with64:
+    push rsi
+    push rdi
+.compare:
+    mov al, [rdi]
+    test al, al
+    jz .yes
+    cmp al, [rsi]
+    jne .no
+    inc rsi
+    inc rdi
+    jmp .compare
+.yes:
+    mov al, 1
+    pop rdi
+    pop rsi
+    ret
+.no:
+    xor al, al
+    pop rdi
+    pop rsi
+    ret
+
+; Parse a NUL-terminated unsigned decimal PID. EAX=0 for empty/invalid input.
+parse_decimal64:
+    push rbx
+    xor eax, eax
+    xor ebx, ebx
+.next_digit:
+    movzx ebx, byte [rsi]
+    test bl, bl
+    jz .parsed
+    cmp bl, '0'
+    jb .invalid
+    cmp bl, '9'
+    ja .invalid
+    imul eax, eax, 10
+    jo .invalid
+    sub ebx, '0'
+    add eax, ebx
+    jo .invalid
+    inc rsi
+    jmp .next_digit
+.parsed:
+    test eax, eax
+    jz .invalid
+    pop rbx
+    ret
+.invalid:
+    xor eax, eax
+    pop rbx
+    ret
+
+; Minimal one-file filesystem on a dedicated disk: LBA0 metadata, LBA1 data.
+; Metadata signature "NOVAFS1", byte length at +8, filename at +12.
+fs_read_header64:
+    mov eax, FS_SUPER_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .fail
+    mov rsi, fs_sector_buffer
+    mov rdi, fs_magic
+    mov ecx, 7
+.compare:
+    mov al, [rsi]
+    cmp al, [rdi]
+    jne .fail
+    inc rsi
+    inc rdi
+    loop .compare
+    mov eax, [rel fs_sector_buffer + 8]
+    cmp eax, FS_MAX_FILE_SIZE
+    ja .fail
+    mov eax, [rel fs_sector_buffer + 28]
+    cmp eax, FS_MAX_FILE_SIZE
+    ja .fail
+    mov eax, [rel fs_sector_buffer + 36]
+    cmp eax, FS_MAX_FILE_SIZE
+    ja .fail
+    mov eax, 1
+    ret
+.fail:
+    xor eax, eax
+    ret
+
+fs_list64:
+    call fs_read_header64
+    test eax, eax
+    jz .invalid
+    cmp dword [rel fs_sector_buffer + 8], 0
+    je .slot1
+    lea rsi, [rel fs_sector_buffer + 12]
+    mov ecx, 8
+.name0:
+    mov al, [rsi]
+    call put_char64
+    inc rsi
+    loop .name0
+    mov rsi, message_fs_list
+    call print_string64
+    mov eax, [rel fs_sector_buffer + 8]
+    call print_hex32
+    mov al, 10
+    call put_char64
+.slot1:
+    cmp dword [rel fs_sector_buffer + 28], 0
+    je .slot2
+    lea rsi, [rel fs_sector_buffer + 20]
+    mov ecx, 8
+.name1:
+    mov al, [rsi]
+    call put_char64
+    inc rsi
+    loop .name1
+    mov rsi, message_fs_list
+    call print_string64
+    mov eax, [rel fs_sector_buffer + 28]
+    call print_hex32
+    mov al, 10
+    call put_char64
+.slot2:
+    cmp dword [rel fs_sector_buffer + 36], 0
+    je .done
+    lea rsi, [rel fs_sector_buffer + 40]
+    mov ecx, 9
+.name2:
+    mov al, [rsi]
+    call put_char64
+    inc rsi
+    loop .name2
+    mov rsi, message_fs_list
+    call print_string64
+    mov eax, [rel fs_sector_buffer + 36]
+    call print_hex32
+    mov al, 10
+    call put_char64
+.done:
+    ret
+.invalid:
+    mov rsi, message_fs_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+
+fs_cat64:
+    call fs_read_header64
+    test eax, eax
+    jz .invalid
+    mov ecx, [rel fs_sector_buffer + 8]
+    test ecx, ecx
+    jz .empty
+    push rcx
+    mov eax, FS_DATA_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .disk_error
+    pop rcx
+    mov rsi, message_fs_read
+    call print_string64
+    lea rsi, [rel fs_sector_buffer]
+.cat_print:
+    test ecx, ecx
+    jz .cat_done
+    mov al, [rsi]
+    call put_char64
+    inc rsi
+    dec ecx
+    jmp .cat_print
+.cat_done:
+    mov al, 10
+    call put_char64
+    ret
+.empty:
+    mov rsi, message_fs_empty
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.disk_error:
+    pop rcx
+.invalid:
+    mov rsi, message_fs_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+
+; Read the third directory entry, stored in its own sector.
+fs_cat2_64:
+    call fs_read_header64
+    test eax, eax
+    jz .invalid
+    mov ecx, [rel fs_sector_buffer + 36]
+    test ecx, ecx
+    jz .empty
+    push rcx
+    mov eax, FS_DATA2_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .disk_error
+    pop rcx
+    mov rsi, message_fs_read2
+    call print_string64
+    lea rsi, [rel fs_sector_buffer]
+.cat2_print:
+    test ecx, ecx
+    jz .cat2_done
+    mov al, [rsi]
+    call put_char64
+    inc rsi
+    dec ecx
+    jmp .cat2_print
+.cat2_done:
+    mov al, 10
+    call put_char64
+    ret
+.empty:
+    mov rsi, message_fs_empty
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.disk_error:
+    pop rcx
+.invalid:
+    mov rsi, message_fs_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+
+; Store a second user text file in directory slot 3 / data sector 3.
+fs_write2_64:
+    mov ecx, [rel line_length]
+    cmp ecx, 7
+    jbe .usage
+    sub ecx, 7
+    cmp ecx, FS_MAX_FILE_SIZE
+    ja .usage
+    mov [rel fs_file_size], ecx
+    mov eax, FS_SUPER_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .disk_error
+    mov rsi, fs_sector_buffer
+    mov rdi, fs_magic
+    mov ecx, 7
+.write2_signature:
+    mov al, [rsi]
+    cmp al, [rdi]
+    jne .invalid
+    inc rsi
+    inc rdi
+    loop .write2_signature
+    mov eax, [rel fs_file_size]
+    mov [rel fs_sector_buffer + 36], eax
+    lea rsi, [rel fs_filename2]
+    lea rdi, [rel fs_sector_buffer + 40]
+    mov ecx, 9
+    rep movsb
+    mov eax, FS_SUPER_LBA
+    lea rsi, [rel fs_sector_buffer]
+    call ata_write_sector64
+    test eax, eax
+    jz .disk_error
+    lea rdi, [rel fs_sector_buffer]
+    xor eax, eax
+    mov ecx, 64
+    rep stosq
+    mov ecx, [rel fs_file_size]
+    lea rsi, [rel line_buffer + 7]
+    lea rdi, [rel fs_sector_buffer]
+    rep movsb
+    mov eax, FS_DATA2_LBA
+    lea rsi, [rel fs_sector_buffer]
+    call ata_write_sector64
+    test eax, eax
+    jz .disk_error
+    mov rsi, message_fs_written2
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.usage:
+    mov rsi, message_fs_write2_usage
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.invalid:
+    mov rsi, message_fs_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.disk_error:
+    mov rsi, message_fs_no_disk
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+
+; Write NOVA.TXT while preserving the ELF and second text-file entries.
+fs_write64:
+    mov ecx, [rel line_length]
+    cmp ecx, 6
+    jbe .usage
+    sub ecx, 6
+    cmp ecx, FS_MAX_FILE_SIZE
+    ja .usage
+    mov [rel fs_file_size], ecx
+    mov eax, FS_SUPER_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .disk_error
+    mov rsi, fs_sector_buffer
+    mov ecx, 512
+.write_check_blank:
+    cmp byte [rsi], 0
+    jne .write_check_magic
+    inc rsi
+    loop .write_check_blank
+    jmp .write_initialize_header
+.write_check_magic:
+    mov rsi, fs_sector_buffer
+    mov rdi, fs_magic
+    mov ecx, 7
+.write_signature:
+    mov al, [rsi]
+    cmp al, [rdi]
+    jne .invalid
+    inc rsi
+    inc rdi
+    loop .write_signature
+    jmp .write_update_header
+.write_initialize_header:
+    lea rdi, [rel fs_sector_buffer]
+    xor eax, eax
+    mov ecx, 64
+    rep stosq
+    lea rsi, [rel fs_magic]
+    lea rdi, [rel fs_sector_buffer]
+    mov ecx, 7
+    rep movsb
+.write_update_header:
+    mov eax, [rel fs_file_size]
+    mov [rel fs_sector_buffer + 8], eax
+    lea rsi, [rel fs_filename]
+    lea rdi, [rel fs_sector_buffer + 12]
+    mov ecx, 8
+    rep movsb
+    mov eax, FS_SUPER_LBA
+    lea rsi, [rel fs_sector_buffer]
+    call ata_write_sector64
+    test eax, eax
+    jz .disk_error
+    lea rdi, [rel fs_sector_buffer]
+    xor eax, eax
+    mov ecx, 64
+    rep stosq
+    mov ecx, [rel fs_file_size]
+    lea rsi, [rel line_buffer + 6]
+    lea rdi, [rel fs_sector_buffer]
+    rep movsb
+    mov eax, FS_DATA_LBA
+    lea rsi, [rel fs_sector_buffer]
+    call ata_write_sector64
+    test eax, eax
+    jz .disk_error
+    mov rsi, message_fs_written
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.usage:
+    mov rsi, message_fs_write_usage
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.invalid:
+    mov rsi, message_fs_invalid
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+.disk_error:
+    mov rsi, message_fs_no_disk
+    call print_string64
+    mov al, 10
+    call put_char64
+    ret
+
 ; Physical memory manager: bitmap tracks the first 1 GiB in 4 KiB pages.
 ; Bitmap bit 1 = reserved/allocated; bit 0 = available. Keep low 1 MiB
 ; reserved for firmware data, the loaded kernel, stack, and page tables.
@@ -922,7 +1907,7 @@ pmm_init64:
     mov edi, PMM_BITMAP
     mov dword [rel free_page_count], 0
     movzx ebp, word [rel e820_count]
-    mov esi, 0x5000
+    mov esi, 0x50000
 .entry:
     test ebp, ebp
     jz .done
@@ -1224,6 +2209,1088 @@ kfree64:
     pop rbx
     ret
 
+; Install a 64-bit TSS. Ring-3 interrupts use a dedicated kernel stack.
+tss_init64:
+    mov qword [rel tss64 + 4], TSS_STACK_TOP
+    mov word [rel tss64 + 102], 104
+    mov rdx, tss64
+    mov rax, rdx
+    and eax, 0xFFFF
+    shl rax, 16
+    mov r8, rdx
+    shr r8, 16
+    and r8d, 0xFF
+    shl r8, 32
+    or rax, r8
+    mov r8, 0x89
+    shl r8, 40
+    or rax, r8
+    mov r8, rdx
+    shr r8, 24
+    and r8d, 0xFF
+    shl r8, 56
+    or rax, r8
+    or rax, 103
+    mov [rel gdt_tss], rax
+    mov rax, rdx
+    shr rax, 32
+    mov [rel gdt_tss + 8], rax
+    mov ax, gdt_tss - gdt_start
+    ltr ax
+    ret
+
+; Allocate a private page-table hierarchy and two user pages. The kernel
+; remains identity-mapped supervisor-only; only the selected code and stack
+; PTEs receive the user bit. This first address space is intentionally small.
+user_vm_init64:
+    mov edi, USER_TASK_INDEX
+    jmp task_vm_init64
+
+task_vm_init64:
+    cmp qword [rel task_records + r15 + TASK_VM_PML4_OFFSET], 0
+    jne .ready
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    movzx eax, dil
+    imul rax, TASK_RECORD_SIZE
+    mov r15, rax
+    xor r14d, r14d
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel task_records + r15 + TASK_VM_PML4_OFFSET], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel task_records + r15 + TASK_VM_PDPT_OFFSET], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel task_records + r15 + TASK_VM_PD_OFFSET], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel task_records + r15 + TASK_VM_CODE_PAGE_OFFSET], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel task_records + r15 + TASK_VM_STACK_PAGE_OFFSET], rax
+
+    mov rdi, [rel task_records + r15 + TASK_VM_PML4_OFFSET]
+    call vm_zero_page64
+    mov rdi, [rel task_records + r15 + TASK_VM_PDPT_OFFSET]
+    call vm_zero_page64
+    mov rdi, [rel task_records + r15 + TASK_VM_PD_OFFSET]
+    call vm_zero_page64
+    mov rdi, [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET]
+    call vm_zero_page64
+    mov rdi, [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET]
+    call vm_zero_page64
+    mov rdi, [rel task_records + r15 + TASK_VM_CODE_PAGE_OFFSET]
+    call vm_zero_page64
+    mov rdi, [rel task_records + r15 + TASK_VM_STACK_PAGE_OFFSET]
+    call vm_zero_page64
+
+    ; Copy the kernel's existing identity-map hierarchy.
+    mov rsi, PML4_ADDR
+    mov rdi, [rel task_records + r15 + TASK_VM_PML4_OFFSET]
+    mov ecx, 512
+    rep movsq
+    mov rsi, PDPT_ADDR
+    mov rdi, [rel task_records + r15 + TASK_VM_PDPT_OFFSET]
+    mov ecx, 512
+    rep movsq
+    mov rsi, PD_ADDR
+    mov rdi, [rel task_records + r15 + TASK_VM_PD_OFFSET]
+    mov ecx, 512
+    rep movsq
+
+    mov rax, [rel task_records + r15 + TASK_VM_PDPT_OFFSET]
+    or rax, 7
+    mov rdx, [rel task_records + r15 + TASK_VM_PML4_OFFSET]
+    mov [rdx], rax
+    mov rax, [rel task_records + r15 + TASK_VM_PD_OFFSET]
+    or rax, 7
+    mov rdx, [rel task_records + r15 + TASK_VM_PDPT_OFFSET]
+    mov [rdx], rax
+
+    ; Replace the 2 MiB huge-page entries covering 4-6 MiB and 6-8 MiB
+    ; with page tables so user permissions apply only to individual pages.
+    mov rax, [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET]
+    or rax, 7
+    mov rdx, [rel task_records + r15 + TASK_VM_PD_OFFSET]
+    mov [rdx + 2*8], rax
+    mov rax, [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET]
+    or rax, 7
+    mov [rdx + 3*8], rax
+
+    mov rdi, [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET]
+    mov rdx, USER_CODE_VIRT
+    xor ecx, ecx
+.code_pt_loop:
+    mov rax, rdx
+    or rax, 3
+    mov [rdi + rcx*8], rax
+    add rdx, 0x1000
+    inc ecx
+    cmp ecx, 512
+    jb .code_pt_loop
+    mov rax, [rel task_records + r15 + TASK_VM_CODE_PAGE_OFFSET]
+    or rax, 5                    ; present + user, read-only code page
+    mov rdi, [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET]
+    mov [rdi], rax
+
+    mov rdi, [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET]
+    mov rdx, USER_STACK_VIRT
+    xor ecx, ecx
+.stack_pt_loop:
+    mov rax, rdx
+    or rax, 3
+    mov [rdi + rcx*8], rax
+    add rdx, 0x1000
+    inc ecx
+    cmp ecx, 512
+    jb .stack_pt_loop
+    mov rax, [rel task_records + r15 + TASK_VM_STACK_PAGE_OFFSET]
+    or rax, 7                    ; present + writable + user stack page
+    mov rdi, [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET]
+    mov [rdi], rax
+
+    mov rax, [rel task_records + r15 + TASK_VM_PML4_OFFSET]
+    mov [rel task_records + r15 + TASK_CR3_OFFSET], rax
+    mov r14d, 1
+    jmp .done
+.fail:
+    ; Roll back every page acquired before an allocation failure. The helper
+    ; tolerates zero pointers and clears each owner field after releasing it.
+    call user_vm_cleanup64
+    xor r14d, r14d
+.done:
+    mov eax, r14d
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+.ready:
+    mov eax, 1
+    ret
+
+shell_vm_init64:
+    cmp qword [rel shell_pml4_page], 0
+    jne .ready
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    xor r14d, r14d
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_pml4_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_pdpt_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_pd_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_code_pt_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_stack_pt_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_code_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_stack_page], rax
+    call pmm_alloc_page64
+    test rax, rax
+    jz .fail
+    mov [rel shell_kernel_stack_page], rax
+    lea rdx, [rax + 0x1000]
+    mov [rel shell_kernel_stack_top], rdx
+
+    mov rdi, [rel shell_pml4_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_pdpt_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_pd_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_code_pt_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_stack_pt_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_code_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_stack_page]
+    call vm_zero_page64
+    mov rdi, [rel shell_kernel_stack_page]
+    call vm_zero_page64
+
+    ; Copy the kernel's existing identity-map hierarchy.
+    mov rsi, PML4_ADDR
+    mov rdi, [rel shell_pml4_page]
+    mov ecx, 512
+    rep movsq
+    mov rsi, PDPT_ADDR
+    mov rdi, [rel shell_pdpt_page]
+    mov ecx, 512
+    rep movsq
+    mov rsi, PD_ADDR
+    mov rdi, [rel shell_pd_page]
+    mov ecx, 512
+    rep movsq
+
+    mov rax, [rel shell_pdpt_page]
+    or rax, 7
+    mov rdx, [rel shell_pml4_page]
+    mov [rdx], rax
+    mov rax, [rel shell_pd_page]
+    or rax, 7
+    mov rdx, [rel shell_pdpt_page]
+    mov [rdx], rax
+
+    ; Replace the 2 MiB huge-page entries covering 4-6 MiB and 6-8 MiB
+    ; with page tables so user permissions apply only to individual pages.
+    mov rax, [rel shell_code_pt_page]
+    or rax, 7
+    mov rdx, [rel shell_pd_page]
+    mov [rdx + 2*8], rax
+    mov rax, [rel shell_stack_pt_page]
+    or rax, 7
+    mov [rdx + 3*8], rax
+
+    mov rdi, [rel shell_code_pt_page]
+    mov rdx, USER_CODE_VIRT
+    xor ecx, ecx
+.code_pt_loop:
+    mov rax, rdx
+    or rax, 3
+    mov [rdi + rcx*8], rax
+    add rdx, 0x1000
+    inc ecx
+    cmp ecx, 512
+    jb .code_pt_loop
+    mov rax, [rel shell_code_page]
+    or rax, 5                    ; present + user, read-only code page
+    mov rdi, [rel shell_code_pt_page]
+    mov [rdi], rax
+
+    mov rdi, [rel shell_stack_pt_page]
+    mov rdx, USER_STACK_VIRT
+    xor ecx, ecx
+.stack_pt_loop:
+    mov rax, rdx
+    or rax, 3
+    mov [rdi + rcx*8], rax
+    add rdx, 0x1000
+    inc ecx
+    cmp ecx, 512
+    jb .stack_pt_loop
+    mov rax, [rel shell_stack_page]
+    or rax, 7                    ; present + writable + user stack page
+    mov rdi, [rel shell_stack_pt_page]
+    mov [rdi], rax
+
+    mov rdi, [rel shell_code_page]
+    lea rsi, [rel user_shell_program_start]
+    mov ecx, user_shell_program_end - user_shell_program_start
+    rep movsb
+    mov rax, [rel shell_pml4_page]
+    mov [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_CR3_OFFSET], rax
+    mov r14d, 1
+    jmp .done
+.fail:
+    xor r14d, r14d
+.done:
+    mov eax, r14d
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+.ready:
+    mov eax, 1
+    ret
+
+; A small ring-3 shell image; command parsing remains in validated kernel syscall 5.
+align 16
+user_shell_program_start:
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_shell_prompt - user_shell_program_start)
+    mov esi, user_shell_prompt_end - user_shell_prompt
+    int 0x80
+    xor r12d, r12d
+.loop:
+    mov eax, 3
+    int 0x80
+    test al, al
+    jz .loop
+    cmp al, 10
+    je .enter
+    cmp al, 8
+    je .backspace
+    cmp r12d, 120
+    jae .loop
+    mov [USER_STACK_VIRT + 0x800 + r12], al
+    mov eax, 1
+    mov rdi, USER_STACK_VIRT + 0x800
+    add rdi, r12
+    mov esi, 1
+    int 0x80
+    inc r12d
+    jmp .loop
+.backspace:
+    test r12d, r12d
+    jz .loop
+    dec r12d
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_shell_backspace - user_shell_program_start)
+    mov esi, user_shell_backspace_end - user_shell_backspace
+    int 0x80
+    jmp .loop
+.enter:
+    mov byte [USER_STACK_VIRT + 0x800 + r12], 0
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_shell_newline - user_shell_program_start)
+    mov esi, 1
+    int 0x80
+    mov eax, 5
+    mov rdi, USER_STACK_VIRT + 0x800
+    mov rsi, r12
+    int 0x80
+    xor r12d, r12d
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_shell_prompt - user_shell_program_start)
+    mov esi, user_shell_prompt_end - user_shell_prompt
+    int 0x80
+    jmp .loop
+user_shell_prompt db 'nova> '
+user_shell_prompt_end:
+user_shell_newline db 10
+user_shell_backspace db 8, ' ', 8
+user_shell_backspace_end:
+user_shell_program_end:
+
+vm_zero_page64:
+    push rcx
+    push rdi
+    xor eax, eax
+    mov ecx, 512
+    rep stosq
+    pop rdi
+    pop rcx
+    ret
+
+; EDI selects 0=normal user program, 1=deliberate user-only protection fault.
+; Schedule the built-in ring-3 regression program as a real task instead of
+; entering user mode synchronously inside the shell's syscall stack.
+user_task_test_start64:
+    push rbx
+    push r12
+    push r13
+    mov r12d, edi
+    cmp byte [rel user_process_state], 1
+    je .busy
+    mov al, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET]
+    cmp al, TASK_STOPPED
+    je .state_allows_launch
+    cmp al, TASK_UNUSED
+    jne .busy
+.state_allows_launch:
+    call user_vm_init64
+    test eax, eax
+    jz .failed
+    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PAGE_OFFSET]
+    test r12d, r12d
+    jnz .fault_program
+    lea rsi, [rel user_program_start]
+    mov ecx, user_program_end - user_program_start
+    jmp .copy
+.fault_program:
+    lea rsi, [rel user_fault_program_start]
+    mov ecx, user_fault_program_end - user_fault_program_start
+.copy:
+    rep movsb
+    mov qword [rel user_process_entry], USER_CODE_VIRT
+    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    mov eax, [rel next_process_pid]
+    mov [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET], eax
+    inc dword [rel next_process_pid]
+    jnz .pid_ready
+    mov dword [rel next_process_pid], 5
+.pid_ready:
+    mov byte [rel user_process_state], 1
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
+    mov rsi, message_user_task_scheduled
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.busy:
+    mov rsi, message_fs_exec_running
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.failed:
+    mov rsi, message_uservm_failed
+    call print_string64
+    mov al, 10
+    call put_char64
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+user_test_run64:
+    push rbp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12d, edi
+    call user_vm_init64
+    test eax, eax
+    jz .setup_failed
+    mov rdi, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_CODE_PAGE_OFFSET]
+    test r12d, r12d
+    jnz .copy_fault_program
+    lea rsi, [rel user_program_start]
+    mov ecx, user_program_end - user_program_start
+    jmp .copy_program
+.copy_fault_program:
+    lea rsi, [rel user_fault_program_start]
+    mov ecx, user_fault_program_end - user_fault_program_start
+.copy_program:
+    rep movsb
+    mov [rel user_return_rsp], rsp
+    mov byte [rel sync_user_test_active], 1
+    ; Nested ring-3 tests must not reuse the shell syscall stack for CPL0 entry.
+    mov qword [rel tss64 + 4], TSS_STACK_TOP
+    mov rax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PML4_OFFSET]
+    mov cr3, rax
+    push qword USER_DATA_SEL
+    push qword USER_STACK_TOP
+    push qword 0x202
+    push qword USER_CODE_SEL
+    push qword USER_CODE_VIRT
+    iretq
+.setup_failed:
+    mov rsi, message_uservm_failed
+    call print_string64
+    mov al, 10
+    call put_char64
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+
+; Syscall ABI: RAX=1 writes (RDI=user pointer, RSI=length); RAX=2 exits.
+; Invalid syscall arguments terminate the process instead of returning to user.
+syscall80_handler64:
+    cmp eax, 1
+    je .write
+    cmp eax, 2
+    je .exit
+    cmp eax, 3
+    je .read_key
+    cmp eax, 4
+    je .file_read
+    cmp eax, 5
+    je syscall_shell_run_command64
+    cmp eax, 7
+    je .file_write
+    cmp eax, 6
+    je .yield
+    jmp user_bad_syscall_exit64
+.read_key:
+    push rax
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    sti
+    call poll_keyboard64
+    cli
+    mov [rsp + 112], al
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
+.yield:
+    ; Reuse the timer preemption path so a ring-3 task can voluntarily yield.
+    ; The IRQ handler saves this kernel syscall context and resumes it later.
+    int 0x20
+    iretq
+.write:
+    cmp rsi, 1024
+    ja user_bad_syscall_exit64
+    mov rax, rdi
+    add rax, rsi
+    jc user_bad_syscall_exit64
+    cmp rdi, USER_CODE_VIRT
+    jb .write_stack_range
+    cmp rdi, USER_CODE_VIRT + 4096
+    jae .write_stack_range
+    cmp rax, USER_CODE_VIRT + 4096
+    ja user_bad_syscall_exit64
+    jmp .write_valid
+.write_stack_range:
+    cmp rdi, USER_STACK_VIRT
+    jb user_bad_syscall_exit64
+    cmp rdi, USER_STACK_VIRT + 4096
+    jae user_bad_syscall_exit64
+    cmp rax, USER_STACK_VIRT + 4096
+    ja user_bad_syscall_exit64
+.write_valid:
+    push rax
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+.write_loop:
+    test rsi, rsi
+    jz .write_done
+    mov al, [rdi]
+    call put_char64
+    inc rdi
+    dec rsi
+    jmp .write_loop
+.write_done:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
+; RAX=4 reads NOVA.TXT into a validated writable user-stack buffer.
+; RDI=destination, RSI=capacity (<=121); returns bytes copied in EAX.
+.file_write:
+    ; RDI=source, RSI=length. Copy from a validated user stack range into
+    ; kernel-owned command storage before invoking the existing disk writer.
+    cmp rdi, USER_STACK_VIRT
+    jb user_bad_syscall_exit64
+    cmp rsi, 121
+    ja user_bad_syscall_exit64
+    mov rax, rdi
+    add rax, rsi
+    jc user_bad_syscall_exit64
+    cmp rax, USER_STACK_VIRT + 4096
+    ja user_bad_syscall_exit64
+    push rax
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13, rsi
+    lea rsi, [rel command_write_prefix]
+    lea rdi, [rel line_buffer]
+    mov ecx, 6
+    rep movsb
+    mov rsi, r12
+    lea rdi, [rel line_buffer + 6]
+    mov ecx, r13d
+    rep movsb
+    lea rdx, [rel line_buffer + 6]
+    mov byte [rdx + r13], 0
+    lea rdi, [rel line_buffer + 6]
+    mov [rel line_length], r13d
+    add dword [rel line_length], 6
+    call fs_write64
+    mov dword [rel line_length], 0
+    mov byte [rel line_buffer], 0
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
+
+.file_read:
+    cmp rdi, USER_STACK_VIRT
+    jb user_bad_syscall_exit64
+    cmp rsi, 121
+    ja user_bad_syscall_exit64
+    mov rax, rdi
+    add rax, rsi
+    jc user_bad_syscall_exit64
+    cmp rax, USER_STACK_VIRT + 4096
+    ja user_bad_syscall_exit64
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r13, rdi
+    mov r14, rsi
+    call fs_read_header64
+    test eax, eax
+    jz .file_read_empty
+    mov r12d, [rel fs_sector_buffer + 8]
+    cmp r12, r14
+    jbe .file_read_length_ready
+    mov r12, r14
+.file_read_length_ready:
+    test r12, r12
+    jz .file_read_empty
+    mov eax, FS_DATA_LBA
+    lea rdi, [rel fs_sector_buffer]
+    call ata_read_sector64
+    test eax, eax
+    jz .file_read_empty
+    mov ecx, r12d
+    lea rsi, [rel fs_sector_buffer]
+    mov rdi, r13
+    rep movsb
+    mov eax, r12d
+    jmp .file_read_return
+.file_read_empty:
+    xor eax, eax
+.file_read_return:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    iretq
+
+.exit:
+    cmp byte [rel current_task_index], USER_TASK_INDEX
+    je user_task_exit64
+    mov rsi, message_user_exit
+    call print_string64
+    mov al, 10
+    call put_char64
+    mov byte [rel sync_user_test_active], 0
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    jne .exit_kernel_cr3
+    mov rax, [rel shell_pml4_page]
+    mov cr3, rax
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
+    jmp .exit_restore
+.exit_kernel_cr3:
+    mov eax, PML4_ADDR
+    mov cr3, rax
+.exit_restore:
+    mov rsp, [rel user_return_rsp]
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    sti                         ; exception/syscall gate cleared IF; restore shell IRQs
+    ret
+
+user_bad_syscall_exit64:
+    cmp byte [rel current_task_index], USER_TASK_INDEX
+    je user_task_bad_syscall_exit64
+    mov rsi, message_user_bad_syscall
+    call print_string64
+    mov al, 10
+    call put_char64
+    mov byte [rel sync_user_test_active], 0
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    jne .bad_kernel_cr3
+    mov rax, [rel shell_pml4_page]
+    mov cr3, rax
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
+    jmp .bad_restore
+.bad_kernel_cr3:
+    mov eax, PML4_ADDR
+    mov cr3, rax
+.bad_restore:
+    mov rsp, [rel user_return_rsp]
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    sti                         ; exception/syscall gate cleared IF; restore shell IRQs
+    ret
+
+syscall_shell_run_command64:
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    jne user_shell_fault_exit64
+    cmp rdi, USER_STACK_VIRT
+    jb user_shell_fault_exit64
+    cmp rsi, 127
+    ja user_shell_fault_exit64
+    mov rax, rdi
+    add rax, rsi
+    jc user_shell_fault_exit64
+    cmp rax, USER_STACK_VIRT + 4096
+    ja user_shell_fault_exit64
+    push rax
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    mov r13, rsi
+    lea rdi, [rel line_buffer]
+    mov rsi, r12
+    mov ecx, r13d
+    rep movsb
+    lea rdx, [rel line_buffer]
+    mov byte [rdx + r13], 0
+    mov [rel line_length], r13d
+    call execute_command64
+    mov dword [rel line_length], 0
+    mov byte [rel line_buffer], 0
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
+
+user_shell_fault_exit64:
+    mov rsi, message_shell_fault
+    jmp user_task_terminate64
+user_task_exit64:
+    mov rsi, message_user_exit
+    jmp user_task_terminate64
+user_task_fault_exit64:
+    mov rsi, message_user_fault
+    jmp user_task_terminate64
+user_task_bad_syscall_exit64:
+    mov rsi, message_user_bad_syscall
+; Release the single user process's owned address-space pages. This is
+; called only with a kernel page table active, both for failed setup rollback
+; and after a task has switched away from its user CR3.
+user_vm_cleanup64:
+    mov edi, USER_TASK_INDEX
+    jmp task_vm_cleanup64
+
+task_vm_cleanup64:
+    push rbx
+    push r15
+    movzx eax, dil
+    imul rax, TASK_RECORD_SIZE
+    mov r15, rax
+    mov rdi, [rel task_records + r15 + TASK_VM_CODE_PAGE_OFFSET]
+    test rdi, rdi
+    jz .free_stack
+    call pmm_free_page64
+    mov qword [rel task_records + r15 + TASK_VM_CODE_PAGE_OFFSET], 0
+.free_stack:
+    mov rdi, [rel task_records + r15 + TASK_VM_STACK_PAGE_OFFSET]
+    test rdi, rdi
+    jz .free_code_pt
+    call pmm_free_page64
+    mov qword [rel task_records + r15 + TASK_VM_STACK_PAGE_OFFSET], 0
+.free_code_pt:
+    mov rdi, [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET]
+    test rdi, rdi
+    jz .free_stack_pt
+    call pmm_free_page64
+    mov qword [rel task_records + r15 + TASK_VM_CODE_PT_OFFSET], 0
+.free_stack_pt:
+    mov rdi, [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET]
+    test rdi, rdi
+    jz .free_pd
+    call pmm_free_page64
+    mov qword [rel task_records + r15 + TASK_VM_STACK_PT_OFFSET], 0
+.free_pd:
+    mov rdi, [rel task_records + r15 + TASK_VM_PD_OFFSET]
+    test rdi, rdi
+    jz .free_pdpt
+    call pmm_free_page64
+    mov qword [rel task_records + r15 + TASK_VM_PD_OFFSET], 0
+.free_pdpt:
+    mov rdi, [rel task_records + r15 + TASK_VM_PDPT_OFFSET]
+    test rdi, rdi
+    jz .free_pml4
+    call pmm_free_page64
+    mov qword [rel task_records + r15 + TASK_VM_PDPT_OFFSET], 0
+.free_pml4:
+    mov qword [rel task_records + r15 + TASK_CR3_OFFSET], 0
+    mov rdi, [rel task_records + r15 + TASK_VM_PML4_OFFSET]
+    test rdi, rdi
+    jz .clear_entry
+    call pmm_free_page64
+    mov qword [rel task_records + r15 + TASK_VM_PML4_OFFSET], 0
+.clear_entry:
+    mov qword [rel user_process_entry], 0
+    pop r15
+    pop rbx
+    ret
+
+user_task_terminate64:
+    call print_string64
+    mov al, 10
+    call put_char64
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    je .restart_shell
+    ; Retire the ELF/test process and resume the shell's saved preemption frame.
+    mov byte [rel user_process_state], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_STOPPED
+    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    mov byte [rel current_task_index], SHELL_TASK_INDEX
+    mov byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_RUNNING
+    mov rax, [rel shell_pml4_page]
+    mov cr3, rax
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
+    ; We are now on the kernel's shared identity map, not the retired user CR3.
+    ; Reclaim the process's seven owned pages before restoring the shell frame.
+    call user_vm_cleanup64
+    mov rsp, [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET]
+    test rsp, rsp
+    jz .no_shell_context
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
+.no_shell_context:
+    ; Defensive fallback: restart the user shell if no preemption frame exists.
+    mov byte [rel shell_process_state], 1
+    mov byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_RUNNING
+    mov rsp, [rel shell_kernel_stack_top]
+    push qword USER_DATA_SEL
+    push qword USER_STACK_TOP
+    push qword 0x202
+    push qword USER_CODE_SEL
+    push qword USER_CODE_VIRT
+    iretq
+.restart_shell:
+    mov qword [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    mov byte [rel shell_process_state], 1
+    mov byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_RUNNING
+    mov byte [rel current_task_index], SHELL_TASK_INDEX
+    mov rax, [rel shell_pml4_page]
+    mov cr3, rax
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
+    mov rsp, [rel shell_kernel_stack_top]
+    push qword USER_DATA_SEL
+    push qword USER_STACK_TOP
+    push qword 0x202
+    push qword USER_CODE_SEL
+    push qword USER_CODE_VIRT
+    iretq
+
+user_fault_exit64:
+    mov rsi, message_user_fault
+    call print_string64
+    mov al, 10
+    call put_char64
+    mov byte [rel sync_user_test_active], 0
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    jne .fault_kernel_cr3
+    mov rax, [rel shell_pml4_page]
+    mov cr3, rax
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
+    jmp .fault_restore
+.fault_kernel_cr3:
+    mov eax, PML4_ADDR
+    mov cr3, rax
+.fault_restore:
+    mov rsp, [rel user_return_rsp]
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    sti                         ; exception/syscall gate cleared IF; restore shell IRQs
+    ret
+
+; Minimal timer-preemptive round-robin scheduler. Task 0 is the existing
+; kernel shell context. Tasks 1 and 2 are independent workers that validate
+; PIT-driven context switching. Their stacks use reserved, unused low memory.
+scheduler_init64:
+    mov qword [rel task_records + TASK_SAVED_RSP_OFFSET], 0
+    mov qword [rel task_records + TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov qword [rel task_records + 2*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov qword [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov byte [rel task_records + TASK_STARTED_OFFSET], 1
+    mov byte [rel task_records + TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    mov byte [rel task_records + 2*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    mov byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    mov byte [rel user_process_state], 0
+    mov byte [rel shell_process_state], 1
+    mov byte [rel task_records + TASK_STATE_OFFSET], TASK_UNUSED
+    mov byte [rel task_records + TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
+    mov byte [rel task_records + 2*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_STOPPED
+    mov byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
+    mov dword [rel task_records + TASK_RECORD_SIZE + TASK_PID_OFFSET], 1
+    mov dword [rel task_records + 2*TASK_RECORD_SIZE + TASK_PID_OFFSET], 2
+    mov dword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET], 0
+    mov dword [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET], 4
+    mov dword [rel next_process_pid], 5
+    mov byte [rel current_task_index], 0
+    ret
+
+scheduler_worker_a64:
+.loop:
+    inc qword [rel scheduler_counter_a]
+    pause
+    jmp .loop
+
+scheduler_worker_b64:
+.loop:
+    inc qword [rel scheduler_counter_b]
+    pause
+    jmp .loop
+
 ; Build 32 exception gates and IRQ0/IRQ1 gates at runtime.
 init_idt64:
     lea rdi, [rel idt64]
@@ -1243,6 +3310,18 @@ init_idt64:
     add rsi, 8
     add rdi, 16
     loop .next_gate
+    ; Vector 0x80 is callable from ring 3 (DPL=3 interrupt gate).
+    lea rdi, [rel idt64 + 128*16]
+    mov rax, syscall80_handler64
+    mov [rdi], ax
+    mov word [rdi + 2], CODE64_SEL
+    mov byte [rdi + 4], 0
+    mov byte [rdi + 5], 0xEE
+    shr rax, 16
+    mov [rdi + 6], ax
+    shr rax, 16
+    mov [rdi + 8], eax
+    mov dword [rdi + 12], 0
     lidt [rel idtr64]
     ret
 
@@ -1280,11 +3359,171 @@ pit_init64:
 
 ; IRQ0 increments a 32-bit tick counter; IRQ1 queues the keyboard scancode.
 ; Preserve every general register that the interrupted kernel may be using.
+; IRQ0 is the preemption point. The hardware frame (RIP, CS, RFLAGS)
+; remains directly below the saved general registers.
 irq0_handler64:
     push rax
+    push rcx
+    push rdx
+    push rbx
+    push rbp
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
     inc dword [rel timer_ticks]
+    cmp byte [rel sync_user_test_active], 1
+    je .sync_return
+    movzx eax, byte [rel current_task_index]
+    imul rax, TASK_RECORD_SIZE
+    lea rdx, [rel task_records]
+    mov [rdx + rax + TASK_SAVED_RSP_OFFSET], rsp
+    cmp byte [rdx + rax + TASK_STATE_OFFSET], TASK_RUNNING
+    jne .state_saved
+    mov byte [rdx + rax + TASK_STATE_OFFSET], TASK_READY
+.state_saved:
+    movzx eax, byte [rel current_task_index]
+    ; Scan the other task slots in round-robin order. A slot is eligible
+    ; only when its canonical lifecycle state is READY; UNUSED and STOPPED
+    ; contexts must never be selected just because their index was next.
+    mov r11d, TASK_COUNT
+.next_task_ready:
+    inc al
+    cmp al, TASK_COUNT
+    jb .candidate_index_ready
+    mov al, 1
+.candidate_index_ready:
+    movzx r10d, al
+    mov r9d, r10d
+    imul r9, TASK_RECORD_SIZE
+    lea rdx, [rel task_records]
+    cmp byte [rdx + r9 + TASK_STATE_OFFSET], TASK_READY
+    je .task_runnable
+    dec r11d
+    jnz .next_task_ready
+    ; The shell is the recovery context if no other slot is runnable.
+    mov al, SHELL_TASK_INDEX
+.task_runnable:
+    mov [rel current_task_index], al
+    movzx r10d, al
+    mov r9d, r10d
+    imul r9, TASK_RECORD_SIZE
+    lea rdx, [rel task_records]
+    mov byte [rdx + r9 + TASK_STATE_OFFSET], TASK_RUNNING
+    cmp r10d, USER_TASK_INDEX
+    je .user_cr3
+    cmp r10d, SHELL_TASK_INDEX
+    je .shell_cr3
+    mov eax, PML4_ADDR
+    mov cr3, rax
+    mov qword [rel tss64 + 4], TSS_STACK_TOP
+    jmp .cr3_ready
+.user_cr3:
+    mov rax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_VM_PML4_OFFSET]
+    mov cr3, rax
+    mov qword [rel tss64 + 4], TSS_STACK_TOP
+    jmp .cr3_ready
+.shell_cr3:
+    mov rax, [rel shell_pml4_page]
+    mov cr3, rax
+    mov rax, [rel shell_kernel_stack_top]
+    mov [rel tss64 + 4], rax
+    jmp .cr3_ready
+.cr3_ready:
+    ; A zero saved RSP means this task has never run. Start it on its own stack.
+    mov r9d, r10d
+    imul r9, TASK_RECORD_SIZE
+    lea rdx, [rel task_records]
+    cmp qword [rdx + r9 + TASK_SAVED_RSP_OFFSET], 0
+    jne .resume_task
+    mov byte [rdx + r9 + TASK_STARTED_OFFSET], 1
     mov al, 0x20
     out 0x20, al
+    cmp byte [rel current_task_index], USER_TASK_INDEX
+    jne .first_entry_checks
+    mov rsi, message_user_task_starting
+    call print_string64
+    mov al, 10
+    call put_char64
+.first_entry_checks:
+    cmp byte [rel current_task_index], 1
+    je .start_task_a
+    cmp byte [rel current_task_index], 2
+    je .start_task_b
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    je .start_shell
+    mov rsp, TASK3_STACK_TOP
+    push qword USER_DATA_SEL
+    push qword USER_STACK_TOP
+    push qword 0x202
+    push qword USER_CODE_SEL
+    push qword [rel user_process_entry]
+    iretq
+.start_shell:
+    mov rsp, [rel shell_kernel_stack_top]
+    push qword USER_DATA_SEL
+    push qword USER_STACK_TOP
+    push qword 0x202
+    push qword USER_CODE_SEL
+    push qword USER_CODE_VIRT
+    iretq
+.start_task_b:
+    mov rsp, TASK2_STACK_TOP
+    sti
+    jmp scheduler_worker_b64
+.start_task_a:
+    mov rsp, TASK1_STACK_TOP
+    sti
+    jmp scheduler_worker_a64
+
+.resume_task:
+    mov r9d, r10d
+    imul r9, TASK_RECORD_SIZE
+    lea rdx, [rel task_records]
+    mov rsp, [rdx + r9 + TASK_SAVED_RSP_OFFSET]
+    mov al, 0x20
+    out 0x20, al
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
+
+.sync_return:
+    mov al, 0x20
+    out 0x20, al
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rbp
+    pop rbx
+    pop rdx
+    pop rcx
     pop rax
     iretq
 
@@ -1313,6 +3552,19 @@ irq1_handler64:
     iretq
 
 exception_common64:
+    ; Ring-3 faults terminate only the current test process. The kernel shell
+    ; and worker tasks remain alive; ring-0 faults retain the fatal diagnostic.
+    mov rax, [rsp + 24]
+    test al, 3
+    jz .kernel_fault
+    cmp byte [rel sync_user_test_active], 1
+    je user_fault_exit64
+    cmp byte [rel current_task_index], USER_TASK_INDEX
+    je user_task_fault_exit64
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    je user_shell_fault_exit64
+    jmp user_fault_exit64
+.kernel_fault:
     ; Stubs normalize the stack to [vector, error code, saved RIP, ...].
     mov ebx, [rsp]
     push rax
@@ -1405,7 +3657,7 @@ isr_table64:
 
 align 16
 idt64:
-    times 34 * 16 db 0
+    times 129 * 16 db 0
 idt64_end:
 
 idtr64:
@@ -1426,6 +3678,108 @@ marker_c db 'C', 0
 marker_j db 'J', 0
 marker_p db 'P', 0
 BITS 64
+user_program_start:
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_program_message - user_program_start)
+    mov esi, user_program_message_end - user_program_message
+    int 0x80
+    mov eax, 2
+    int 0x80
+    jmp $
+user_program_message db 'NOVA ring-3 program: syscall write works', 10
+user_program_message_end:
+user_program_end:
+
+user_fault_program_start:
+    mov rax, 0x500000
+    mov byte [rax], 0
+    mov eax, 2
+    int 0x80
+    jmp $
+user_fault_program_end:
+
+; A minimal static ELF64 executable: one RX PT_LOAD segment at 0x400000.
+; It uses syscall 1 for console output and syscall 2 to exit to the shell.
+align 8
+user_elf_start:
+    db 0x7F, 'E', 'L', 'F', 2, 1, 1, 0
+    times 8 db 0
+    dw 2
+    dw 0x3E
+    dd 1
+    dq USER_CODE_VIRT + (user_elf_entry - user_elf_start)
+    dq 64
+    dq 0
+    dd 0
+    dw 64
+    dw 56
+    dw 1
+    dw 64
+    dw 0
+    dw 0
+    dd 1
+    dd 5
+    dq 0
+    dq USER_CODE_VIRT
+    dq USER_CODE_VIRT
+    dq user_elf_end - user_elf_start
+    dq user_elf_end - user_elf_start
+    dq 0x1000
+user_elf_entry:
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_elf_message - user_elf_start)
+    mov esi, user_elf_message_end - user_elf_message
+    int 0x80
+    ; Read the persistent text file into the writable user stack, then print it.
+    ; Copy the constant payload into writable user memory, then save it.
+    mov rsi, USER_CODE_VIRT + (user_elf_payload - user_elf_start)
+    mov rdi, USER_STACK_VIRT + 0x800
+    mov ecx, user_elf_payload_end - user_elf_payload
+    rep movsb
+    ; Exercise the file-write syscall, then read the saved bytes back.
+    mov eax, 7
+    mov rdi, USER_STACK_VIRT + 0x800
+    mov esi, user_elf_payload_end - user_elf_payload
+    int 0x80
+    mov eax, 4
+    mov rdi, USER_STACK_VIRT + 0x800
+    mov esi, 121
+    int 0x80
+    test eax, eax
+    jz .elf_exit
+    mov esi, eax
+    mov rdi, USER_STACK_VIRT + 0x800
+    mov eax, 1
+    int 0x80
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_elf_yield_message - user_elf_start)
+    mov esi, user_elf_yield_message_end - user_elf_yield_message
+    int 0x80
+    mov eax, 6
+    int 0x80
+    mov eax, 1
+    mov rdi, USER_CODE_VIRT + (user_elf_resumed_message - user_elf_start)
+    mov esi, user_elf_resumed_message_end - user_elf_resumed_message
+    int 0x80
+.elf_exit:
+    mov eax, 2
+    int 0x80
+    jmp $
+user_elf_message db 'NOVA ELF64 program loaded from disk: ', 10
+user_elf_message_end:
+user_elf_payload db 'user process wrote persistent data'
+user_elf_payload_end:
+user_elf_yield_message db 'NOVA ELF task yielding to scheduler', 10
+user_elf_yield_message_end:
+user_elf_resumed_message db 'NOVA ELF task resumed after yield', 10
+user_elf_resumed_message_end:
+user_elf_end:
+
+align 8
+tss64:
+    times 104 db 0
+tss64_end:
+
 banner64 db 'NOVA OS - 64-bit kernel online', 0
 prompt64 db 'nova> ', 0
 command_help db 'help', 0
@@ -1433,6 +3787,8 @@ command_about db 'about', 0
 command_clear db 'clear', 0
 command_reboot db 'reboot', 0
 command_memory db 'memory', 0
+command_mem db 'mem', 0
+command_ps db 'ps', 0
 command_alloc db 'alloc', 0
 command_free db 'free', 0
 command_heap db 'heap', 0
@@ -1440,7 +3796,25 @@ command_halloc db 'halloc', 0
 command_hfree db 'hfree', 0
 command_uptime db 'uptime', 0
 command_pmmtest db 'pmmtest', 0
-message_help db 'Commands: help, about, clear, memory, alloc, free, pmmtest, heap, halloc, hfree, uptime, reboot', 0
+command_schedtest db 'schedtest', 0
+command_usertest db 'usertest', 0
+command_userfaulttest db 'userfaulttest', 0
+command_install db 'install', 0
+command_exec db 'exec', 0
+command_ls db 'ls', 0
+command_cat db 'cat', 0
+command_cat2 db 'cat2', 0
+command_kill_prefix db 'kill ', 0
+command_write2_prefix db 'write2 ', 0
+fs_filename2 db 'NOVA2.TXT'
+
+fs_magic db 'NOVAFS1'
+fs_filename db 'NOVA.TXT'
+fs_elf_filename db 'NOVA.ELF'
+fs_sector_buffer times 512 db 0
+fs_file_size dd 0
+command_write_prefix db 'write ', 0
+message_help db 'Commands: help, about, clear, memory, mem, ps, kill <pid>, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, cat2, write, write2, heap, halloc, hfree, uptime, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
 message_memory db 'Firmware E820 entries: 0x', 0
@@ -1453,6 +3827,45 @@ message_free_none db 'No test page is currently allocated.', 0
 message_free_failed db 'Could not free the test page.', 0
 message_pmmtest_pass db 'PMM safety test passed: reserved and double frees rejected.', 0
 message_pmmtest_fail db 'PMM safety test FAILED.', 0
+message_schedtest_pass db 'Scheduler test passed: both preempted tasks made progress.', 0
+message_schedtest_fail db 'Scheduler test FAILED: a worker task did not run.', 0
+message_ps_foreground db 'Task 0: foreground shell / user-program context', 0
+message_ps_worker_a db 'Task 1: worker-a iterations: 0x', 0
+message_ps_worker_b db 'Task 2: worker-b iterations: 0x', 0
+message_ps_user db 'Task 3: user ELF state (0=stopped, 1=runnable): 0x', 0
+message_ps_user_pid db 'Task 3 PID: 0x', 0
+message_ps_shell_pid db 'Task 4 PID: 0x', 0
+message_process_killed db 'Process terminated and its address space reclaimed.', 0
+message_process_not_found db 'Process PID not found or kill syntax invalid (use: kill <pid>).', 0
+message_process_not_running db 'Process exists but is not running.', 0
+message_ps_user_lifecycle db 'Task 3 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x', 0
+message_ps_shell_lifecycle db 'Task 4 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x', 0
+message_ps_user_cr3 db 'Task 3 address-space root (0=none): 0x', 0
+message_ps_shell_cr3 db 'Task 4 address-space root (0=none): 0x', 0
+message_uservm_failed db 'User VM setup failed: no physical pages available.', 0
+message_user_exit db 'Ring-3 program exited through syscall.', 0
+message_user_fault db 'User process faulted; terminated safely.', 0
+message_user_bad_syscall db 'User process made an invalid syscall; terminated.', 0
+message_fs_no_disk db 'Storage unavailable: attach a writable IDE data disk.', 0
+message_fs_invalid db 'Storage is unformatted or has an invalid NOVA filesystem header.', 0
+message_fs_empty db 'NOVA.TXT is empty or does not exist.', 0
+message_fs_written db 'Saved NOVA.TXT to persistent storage.', 0
+message_shell_fault db 'User shell faulted; retiring shell task.', 0
+message_shell_vm_failed db 'Unable to initialize protected user shell memory.', 0
+message_user_task_scheduled db 'Scheduled ring-3 regression program.', 0
+message_user_task_starting db 'Starting ring-3 task.', 0
+message_fs_written2 db 'Saved NOVA2.TXT to persistent storage.', 0
+message_fs_read2 db 'File NOVA2.TXT: ', 0
+message_fs_write2_usage db 'Usage: write2 <text> (maximum 121 bytes).', 0
+
+message_fs_list db ' bytes: 0x', 0
+message_fs_read db 'File: ', 0
+message_fs_write_usage db 'Usage: write <text> (maximum 121 bytes).', 0
+message_fs_installed db 'Installed NOVA.ELF on persistent storage.', 0
+message_fs_elf_invalid db 'NOVA.ELF is invalid or unsupported.', 0
+message_fs_exec_failed db 'Could not load NOVA.ELF from storage.', 0
+message_fs_exec_started db 'Started NOVA.ELF as a preemptively scheduled user process.', 0
+message_fs_exec_running db 'A user process is already running.', 0
 message_heap_status db 'Heap pages allocated: 0x', 0
 message_heap_allocated db 'Heap allocation at: 0x', 0
 message_heap_already db 'A heap test allocation already exists; use hfree first.', 0
@@ -1474,6 +3887,38 @@ align 4
 timer_ticks dd 0
 free_page_count dd 0
 test_alloc_page dq 0
+
+user_kernel_stack_page dq 0
+user_kernel_stack_top dq 0
+shell_pml4_page dq 0
+shell_pdpt_page dq 0
+shell_pd_page dq 0
+shell_code_pt_page dq 0
+shell_stack_pt_page dq 0
+shell_code_page dq 0
+shell_stack_page dq 0
+shell_kernel_stack_page dq 0
+shell_kernel_stack_top dq 0
+shell_process_state db 0
+
+
+
+
+
+
+user_return_rsp dq 0
+user_process_entry dq 0
+user_process_state db 0
+next_process_pid dd 5
+sync_user_test_active db 0
+current_task_index db 0
+align 8
+; Stable slot index -> one record containing lifecycle, first-run marker,
+; saved interrupt context, and CR3 metadata. Address-space page ownership is
+; still allocated by the existing single-user-process manager.
+task_records times TASK_COUNT*TASK_RECORD_SIZE db 0
+scheduler_counter_a dq 0
+scheduler_counter_b dq 0
 heap_head dq 0
 heap_pages dd 0
 test_heap_ptr dq 0
