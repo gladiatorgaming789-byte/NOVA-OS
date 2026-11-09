@@ -277,15 +277,17 @@ def main() -> int:
                 re.escape(b"Task 3 exit status: 0x00000001"),
                 "inspect faulted process metadata",
             )
-            fault_pid_match = re.search(rb"Task 3 PID: 0x([0-9A-F]{8})", fault_ps)
-            if fault_pid_match is None:
+            fault_pid_matches = re.findall(
+                rb"Task 3 PID: 0x([0-9A-F]{8})", fault_ps
+            )
+            if not fault_pid_matches:
                 raise RuntimeError(
                     "could not parse faulted process PID from ps output: "
                     + fault_ps.decode(errors="replace")[-1200:]
                 )
             if b"Task 3 exit status: 0x00000001" not in fault_ps:
                 raise RuntimeError("user fault did not record exit status 1")
-            fault_pid = str(int(fault_pid_match.group(1), 16))
+            fault_pid = str(int(fault_pid_matches[-1], 16))
             run_command(
                 tuple(["w", "a", "i", "t", "spc"] + list(fault_pid) + ["ret"]),
                 re.escape(b"Process reaped; exit status: 0x00000001"),
