@@ -32,7 +32,8 @@ TASK_VM_CODE_PT_OFFSET equ 48
 TASK_VM_STACK_PT_OFFSET equ 56
 TASK_VM_CODE_PAGE_OFFSET equ 64
 TASK_VM_STACK_PAGE_OFFSET equ 72
-TASK_RECORD_SIZE equ 80
+TASK_PID_OFFSET equ 80
+TASK_RECORD_SIZE equ 88
 USER_CODE_VIRT equ 0x400000
 USER_STACK_VIRT equ 0x600000
 USER_STACK_TOP equ 0x600FF0
@@ -684,6 +685,11 @@ execute_command64:
     test al, al
     jnz .userfaulttest
     mov rsi, line_buffer
+    mov rdi, command_kill_prefix
+    call string_starts_with64
+    test al, al
+    jnz .kill
+    mov rsi, line_buffer
     mov rdi, command_write2_prefix
     call string_starts_with64
     test al, al
@@ -885,6 +891,45 @@ execute_command64:
     mov al, 10
     call put_char64
     jmp .done
+.kill:
+    ; The shell is the active context while this command runs. Switch off
+    ; interrupts while retiring the user task so the scheduler cannot select
+    ; it between marking it stopped and reclaiming its address-space pages.
+    pushfq
+    cli
+    lea rsi, [rel line_buffer + 5]
+    call parse_decimal64
+    cmp eax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET]
+    jne .kill_invalid
+    cmp byte [rel current_task_index], SHELL_TASK_INDEX
+    jne .kill_invalid
+    cmp byte [rel user_process_state], 1
+    jne .kill_not_running
+    mov byte [rel user_process_state], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_STOPPED
+    mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
+    mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    call user_vm_cleanup64
+    popfq
+    mov rsi, message_process_killed
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.kill_invalid:
+    popfq
+    mov rsi, message_process_not_found
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
+.kill_not_running:
+    popfq
+    mov rsi, message_process_not_running
+    call print_string64
+    mov al, 10
+    call put_char64
+    jmp .done
 .ps:
     mov rsi, message_ps_foreground
     call print_string64
@@ -908,9 +953,21 @@ execute_command64:
     call print_hex32
     mov al, 10
     call put_char64
+    mov rsi, message_ps_user_pid
+    call print_string64
+    mov eax, [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET]
+    call print_hex32
+    mov al, 10
+    call put_char64
     mov rsi, message_ps_user_lifecycle
     call print_string64
     movzx eax, byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET]
+    call print_hex32
+    mov al, 10
+    call put_char64
+    mov rsi, message_ps_shell_pid
+    call print_string64
+    mov eax, [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET]
     call print_hex32
     mov al, 10
     call put_char64
@@ -1238,6 +1295,12 @@ fs_exec64:
     mov [rel user_process_entry], r13
     mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
     mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    mov eax, [rel next_process_pid]
+    mov [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET], eax
+    inc dword [rel next_process_pid]
+    jnz .pid_ready
+    mov dword [rel next_process_pid], 5
+.pid_ready:
     mov byte [rel user_process_state], 1
     mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
     mov rsi, message_fs_exec_started
@@ -1434,6 +1497,36 @@ string_starts_with64:
     xor al, al
     pop rdi
     pop rsi
+    ret
+
+; Parse a NUL-terminated unsigned decimal PID. EAX=0 for empty/invalid input.
+parse_decimal64:
+    push rbx
+    xor eax, eax
+    xor ebx, ebx
+.next_digit:
+    movzx ebx, byte [rsi]
+    test bl, bl
+    jz .parsed
+    cmp bl, '0'
+    jb .invalid
+    cmp bl, '9'
+    ja .invalid
+    imul eax, eax, 10
+    jo .invalid
+    sub ebx, '0'
+    add eax, ebx
+    jo .invalid
+    inc rsi
+    jmp .next_digit
+.parsed:
+    test eax, eax
+    jz .invalid
+    pop rbx
+    ret
+.invalid:
+    xor eax, eax
+    pop rbx
     ret
 
 ; Minimal one-file filesystem on a dedicated disk: LBA0 metadata, LBA1 data.
@@ -2549,6 +2642,12 @@ user_task_test_start64:
     mov qword [rel user_process_entry], USER_CODE_VIRT
     mov qword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_SAVED_RSP_OFFSET], 0
     mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STARTED_OFFSET], 0
+    mov eax, [rel next_process_pid]
+    mov [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET], eax
+    inc dword [rel next_process_pid]
+    jnz .pid_ready
+    mov dword [rel next_process_pid], 5
+.pid_ready:
     mov byte [rel user_process_state], 1
     mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
     mov rsi, message_user_task_scheduled
@@ -3172,6 +3271,11 @@ scheduler_init64:
     mov byte [rel task_records + 2*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
     mov byte [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_STOPPED
     mov byte [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_STATE_OFFSET], TASK_READY
+    mov dword [rel task_records + TASK_RECORD_SIZE + TASK_PID_OFFSET], 1
+    mov dword [rel task_records + 2*TASK_RECORD_SIZE + TASK_PID_OFFSET], 2
+    mov dword [rel task_records + USER_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET], 0
+    mov dword [rel task_records + SHELL_TASK_INDEX*TASK_RECORD_SIZE + TASK_PID_OFFSET], 4
+    mov dword [rel next_process_pid], 5
     mov byte [rel current_task_index], 0
     ret
 
@@ -3700,6 +3804,7 @@ command_exec db 'exec', 0
 command_ls db 'ls', 0
 command_cat db 'cat', 0
 command_cat2 db 'cat2', 0
+command_kill_prefix db 'kill ', 0
 command_write2_prefix db 'write2 ', 0
 fs_filename2 db 'NOVA2.TXT'
 
@@ -3709,7 +3814,7 @@ fs_elf_filename db 'NOVA.ELF'
 fs_sector_buffer times 512 db 0
 fs_file_size dd 0
 command_write_prefix db 'write ', 0
-message_help db 'Commands: help, about, clear, memory, mem, ps, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, cat2, write, write2, heap, halloc, hfree, uptime, reboot', 0
+message_help db 'Commands: help, about, clear, memory, mem, ps, kill <pid>, alloc, free, pmmtest, schedtest, usertest, userfaulttest, install, exec, ls, cat, cat2, write, write2, heap, halloc, hfree, uptime, reboot', 0
 message_about db 'NOVA OS is an experimental x86-64 operating system built from scratch.', 0
 message_unknown db 'Unknown command. Type help.', 0
 message_memory db 'Firmware E820 entries: 0x', 0
@@ -3728,6 +3833,11 @@ message_ps_foreground db 'Task 0: foreground shell / user-program context', 0
 message_ps_worker_a db 'Task 1: worker-a iterations: 0x', 0
 message_ps_worker_b db 'Task 2: worker-b iterations: 0x', 0
 message_ps_user db 'Task 3: user ELF state (0=stopped, 1=runnable): 0x', 0
+message_ps_user_pid db 'Task 3 PID: 0x', 0
+message_ps_shell_pid db 'Task 4 PID: 0x', 0
+message_process_killed db 'Process terminated and its address space reclaimed.', 0
+message_process_not_found db 'Process PID not found or kill syntax invalid (use: kill <pid>).', 0
+message_process_not_running db 'Process exists but is not running.', 0
 message_ps_user_lifecycle db 'Task 3 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x', 0
 message_ps_shell_lifecycle db 'Task 4 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x', 0
 message_ps_user_cr3 db 'Task 3 address-space root (0=none): 0x', 0
@@ -3799,6 +3909,7 @@ shell_process_state db 0
 user_return_rsp dq 0
 user_process_entry dq 0
 user_process_state db 0
+next_process_pid dd 5
 sync_user_test_active db 0
 current_task_index db 0
 align 8
