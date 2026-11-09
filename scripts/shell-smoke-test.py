@@ -148,17 +148,10 @@ def main() -> int:
                 timeout=6,
             )
             print("Ring-3 syscall write/exit test passed.")
-            first_exit_pattern = re.escape(b"Ring-3 program exited through syscall.")
-            deadline = time.monotonic() + 6
-            while time.monotonic() < deadline:
-                if first_exit_pattern in output():
-                    break
-                time.sleep(0.1)
-            else:
-                raise RuntimeError("initial user process did not finish before PID inspection")
-
-            # The single user slot receives a fresh PID on every launch. After
-            # exit it remains queryable as STOPPED but is no longer killable.
+            # The single user slot receives a fresh PID on every launch.
+            # Kill it immediately after observing its output. Depending on the
+            # scheduler tick, it may have exited already; both outcomes must be
+            # safe, and ps must show the slot stopped with its CR3 reclaimed.
             pid_snapshot = run_command(
                 ("p", "s", "ret"),
                 rb"Task 3 PID: 0x[0-9A-F]{8}",
@@ -168,13 +161,25 @@ def main() -> int:
             if not pid_matches or int(pid_matches[-1], 16) < 5:
                 raise RuntimeError("user process did not receive a dynamic PID")
             user_pid = str(int(pid_matches[-1], 16))
-            not_running = re.escape(b"Process exists but is not running.")
+            termination_result = (
+                rb"(?:Process terminated and its address space reclaimed\\."
+                rb"|Process exists but is not running\\.)"
+            )
             run_command(
                 tuple(["k", "i", "l", "l", "spc"] + list(user_pid) + ["ret"]),
-                not_running,
-                "reject termination of an already stopped process",
+                termination_result,
+                "terminate or safely reject an already exited process",
             )
-            print(f"Process identity and stopped-process checks passed (PID {user_pid}).")
+            stopped_snapshot = run_command(
+                ("p", "s", "ret"),
+                re.escape(
+                    b"Task 3 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x00000003"
+                ),
+                "process is no longer schedulable",
+            )
+            if b"Task 3 address-space root (0=none): 0x00000000" not in stopped_snapshot:
+                raise RuntimeError("terminated process retained its address-space root")
+            print(f"Process identity, termination, and VM cleanup checks passed (PID {user_pid}).")
 
             # Repeatedly launch and exit the same ring-3 test process. The
             # physical-page count must return to its baseline after every run;
