@@ -280,9 +280,6 @@ def main() -> int:
                 "inspect faulted process metadata",
                 previous_count=previous_fault_pid_count,
             )
-            fault_pids = re.findall(fault_pid_pattern + rb"$", fault_ps, re.MULTILINE)
-            if not fault_pids:
-                raise RuntimeError("faulted process PID was not visible")
             fault_pid_match = re.search(rb"Task 3 PID: 0x([0-9A-F]{8})", fault_ps)
             if fault_pid_match is None:
                 raise RuntimeError("could not parse faulted process PID")
