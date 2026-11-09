@@ -152,10 +152,13 @@ def main() -> int:
             # Kill it immediately after observing its output. Depending on the
             # scheduler tick, it may have exited already; both outcomes must be
             # safe, and ps must show the slot stopped with its CR3 reclaimed.
+            pid_pattern = rb"Task 3 PID: 0x[0-9A-F]{8}"
+            previous_pid_count = len(re.findall(pid_pattern, output()))
             pid_snapshot = run_command(
                 ("p", "s", "ret"),
-                rb"Task 3 PID: 0x[0-9A-F]{8}",
+                pid_pattern,
                 "user process PID inspection",
+                previous_count=previous_pid_count,
             )
             pid_matches = re.findall(rb"Task 3 PID: 0x([0-9A-F]{8})", pid_snapshot)
             if not pid_matches or int(pid_matches[-1], 16) < 5:
@@ -170,12 +173,15 @@ def main() -> int:
                 termination_result,
                 "terminate or safely reject an already exited process",
             )
+            stopped_pattern = re.escape(
+                b"Task 3 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x00000003"
+            )
+            previous_stopped_count = len(re.findall(stopped_pattern, output()))
             stopped_snapshot = run_command(
                 ("p", "s", "ret"),
-                re.escape(
-                    b"Task 3 lifecycle (0=unused,1=ready,2=running,3=stopped): 0x00000003"
-                ),
+                stopped_pattern,
                 "process is no longer schedulable",
+                previous_count=previous_stopped_count,
             )
             if b"Task 3 address-space root (0=none): 0x00000000" not in stopped_snapshot:
                 raise RuntimeError("terminated process retained its address-space root")
