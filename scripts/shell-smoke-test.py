@@ -272,17 +272,17 @@ def main() -> int:
                 "ring-3 protection fault isolation",
                 timeout=6,
             )
-            fault_pid_pattern = rb"Task 3 PID: 0x[0-9A-F]{8}"
-            previous_fault_pid_count = len(re.findall(fault_pid_pattern, output()))
             fault_ps = run_command(
                 ("p", "s", "ret"),
-                fault_pid_pattern,
+                re.escape(b"Task 3 exit status: 0x00000001"),
                 "inspect faulted process metadata",
-                previous_count=previous_fault_pid_count,
             )
             fault_pid_match = re.search(rb"Task 3 PID: 0x([0-9A-F]{8})", fault_ps)
             if fault_pid_match is None:
-                raise RuntimeError("could not parse faulted process PID")
+                raise RuntimeError(
+                    "could not parse faulted process PID from ps output: "
+                    + fault_ps.decode(errors="replace")[-1200:]
+                )
             if b"Task 3 exit status: 0x00000001" not in fault_ps:
                 raise RuntimeError("user fault did not record exit status 1")
             fault_pid = str(int(fault_pid_match.group(1), 16))
